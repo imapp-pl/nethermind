@@ -35,42 +35,45 @@ namespace Nethermind.Merge.Plugin.Synchronization
         private readonly IMergeConfig _mergeConfig;
         private readonly IDb _metadataDb;
         private readonly IBlockTree _blockTree;
-        private readonly IPeerRefresher _peerRefresher;
         private readonly ILogger _logger;
-        private BlockHeader? _currentBeaconPivot;
+
         private BlockHeader? _pivotParent;
         private bool _pivotParentProcessed;
-        
+        private BlockHeader? _currentBeaconPivot;
+
         private BlockHeader? CurrentBeaconPivot
         {
             get => _currentBeaconPivot;
             set
             {
-                _currentBeaconPivot = value;
-                if (value != null)
+                if (_currentBeaconPivot != value)
                 {
-                    _metadataDb.Set(MetadataDbKeys.BeaconSyncPivotHash,
-                        Rlp.Encode(value.Hash ?? value.CalculateHash()).Bytes);
-                    _metadataDb.Set(MetadataDbKeys.BeaconSyncPivotNumber,
-                        Rlp.Encode(value.Number).Bytes);
-                } else _metadataDb.Delete(MetadataDbKeys.BeaconSyncPivotHash);
+                    _currentBeaconPivot = value;
+                    if (value != null)
+                    {
+                        _metadataDb.Set(MetadataDbKeys.BeaconSyncPivotHash, Rlp.Encode(value.Hash ?? value.CalculateHash()).Bytes);
+                        _metadataDb.Set(MetadataDbKeys.BeaconSyncPivotNumber, Rlp.Encode(value.Number).Bytes);
+                    }
+                    else
+                    {
+                        _metadataDb.Delete(MetadataDbKeys.BeaconSyncPivotHash);
+                    }
+                    Changed?.Invoke(this, EventArgs.Empty);
+                }
             }
         }
-
 
         public BeaconPivot(
             ISyncConfig syncConfig,
             IMergeConfig mergeConfig,
             IDb metadataDb,
             IBlockTree blockTree,
-            IPeerRefresher peerRefresher,
             ILogManager logManager)
         {
             _syncConfig = syncConfig;
             _mergeConfig = mergeConfig;
             _metadataDb = metadataDb;
             _blockTree = blockTree;
-            _peerRefresher = peerRefresher;
             _logger = logManager.GetClassLogger();
             LoadBeaconPivot();
         }
@@ -84,15 +87,16 @@ namespace Nethermind.Merge.Plugin.Synchronization
 
         public long PivotDestinationNumber => CurrentBeaconPivot is null
             ? 0
-            : Math.Max(_syncConfig.PivotNumberParsed, _blockTree.BestSuggestedHeader?.Number ?? 0) + 1;
-        
+            // :  Math.Max(_syncConfig.PivotNumberParsed, _blockTree.BestSuggestedHeader?.Number ?? 0) + 1; // TODO: start sync on stable best header
+            : _syncConfig.PivotNumberParsed + 1;
+
+        public event EventHandler? Changed;
+
         public void EnsurePivot(BlockHeader? blockHeader)
         {
             bool beaconPivotExists = BeaconPivotExists();
             if (blockHeader != null)
             {
-                _peerRefresher.RefreshPeers(blockHeader.Hash!);
-                
                 // ToDo Sarah in some cases this could be wrong
                 if (beaconPivotExists && (PivotNumber > blockHeader.Number || blockHeader.Hash == PivotHash))
                 {

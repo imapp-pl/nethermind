@@ -79,7 +79,7 @@ namespace Nethermind.Network.P2P.ProtocolHandlers
 
         public void Disconnect(DisconnectReason reason, string details)
         {
-            if (Logger.IsInfo) Logger.Info($"Disconnecting {Node:c} because of the {details}");
+            if (Logger.IsDebug) Logger.Debug($"Disconnecting {Node:c} because of the {details}");
             Session.InitiateDisconnect(reason, details);
         }
 
@@ -192,7 +192,7 @@ namespace Nethermind.Network.P2P.ProtocolHandlers
             throw new TimeoutException($"{Session} Request timeout in {nameof(GetBlockHeadersMessage)} with {message.MaxHeaders} max headers");
         }
 
-        async Task<BlockHeader> ISyncPeer.GetHeadBlockHeader(Keccak hash, CancellationToken token)
+        async Task<BlockHeader> ISyncPeer.GetBlockHeader(Keccak hash, CancellationToken token)
         {
             GetBlockHeadersMessage msg = new();
             msg.StartBlockHash = hash ?? _remoteHeadBlockHash;

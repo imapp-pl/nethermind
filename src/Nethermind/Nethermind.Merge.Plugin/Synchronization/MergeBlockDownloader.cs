@@ -59,11 +59,12 @@ namespace Nethermind.Merge.Plugin.Synchronization
             ISyncReport? syncReport,
             IReceiptStorage? receiptStorage,
             ISpecProvider specProvider,
+            IPeerAllocationStrategyFactory<BlocksRequest?> peerAllocationStrategyFactory,
             IBetterPeerStrategy betterPeerStrategy,
             IChainLevelHelper chainLevelHelper,
             ILogManager logManager)
             : base(feed, syncPeerPool, blockTree, blockValidator, sealValidator, syncReport, receiptStorage,
-                specProvider, new MergeBlocksSyncPeerAllocationStrategyFactory(posSwitcher, logManager),
+                specProvider, peerAllocationStrategyFactory,
                 betterPeerStrategy, logManager)
         {
             _blockTree = blockTree ?? throw new ArgumentNullException(nameof(blockTree));
