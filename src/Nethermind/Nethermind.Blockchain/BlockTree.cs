@@ -752,13 +752,16 @@ namespace Nethermind.Blockchain
             }
 
             bool isKnown = IsKnownBlock(header.Number, header.Hash);
-            if (!fillBeaconBlock && isKnown && (BestSuggestedHeader?.Number ?? 0) >= header.Number)
+            if (isKnown && (BestSuggestedHeader?.Number ?? 0) >= header.Number)
             {
                 if (_logger.IsTrace) _logger.Trace($"Block {header.ToString(BlockHeader.Format.FullHashAndNumber)} already known.");
                 return AddBlockResult.AlreadyKnown;
             }
 
-            if (!header.IsGenesis && !IsKnownBlock(header.Number - 1, header.ParentHash!))
+            bool isParentKnown = IsKnownBlock(header.Number - 1, header.ParentHash!);
+            bool parentExists = fillBeaconBlock 
+                ? isParentKnown || IsKnownBeaconBlock(header.Number - 1, header.ParentHash) : isParentKnown;
+            if (!header.IsGenesis && !parentExists)
             {
                 if (_logger.IsTrace)
                     _logger.Trace($"Could not find parent ({header.ParentHash}) of block {header.Hash}");
@@ -782,10 +785,7 @@ namespace Nethermind.Blockchain
             {
                 Rlp newRlp = _headerDecoder.Encode(header);
                 _headerDb.Set(header.Hash, newRlp.Bytes);
-            }
-
-            if (!isKnown || fillBeaconBlock)
-            {
+                
                 BlockInfo blockInfo = new(header.Hash, header.TotalDifficulty ?? 0);
 
                 UpdateOrCreateLevel(header.Number, header.Hash, blockInfo, setAsMain is null ? !shouldProcess : setAsMain.Value);
@@ -2013,14 +2013,22 @@ namespace Nethermind.Blockchain
             }
             else
             {
-                BlockHeader parentHeader = GetParentHeader(header);
-
-                if (parentHeader.TotalDifficulty is null)
+                UInt256 parentTotalDifficulty;
+                if (header.Number - 1 == _syncConfig.PivotNumberParsed)
                 {
-                    SetTotalDifficultyDeep(parentHeader);
+                    parentTotalDifficulty = _syncConfig.PivotTotalDifficultyParsed;
                 }
+                else
+                {
+                    BlockHeader parentHeader = GetParentHeader(header);
+                    if (parentHeader.TotalDifficulty is null)
+                    {
+                        SetTotalDifficultyDeep(parentHeader);
+                    }
 
-                header.TotalDifficulty = parentHeader.TotalDifficulty + header.Difficulty;
+                    parentTotalDifficulty = parentHeader.TotalDifficulty ?? 0;
+                }
+                header.TotalDifficulty = parentTotalDifficulty + header.Difficulty;
             }
 
             if (_logger.IsTrace) _logger.Trace($"Calculated total difficulty for {header} is {header.TotalDifficulty}");

@@ -105,7 +105,7 @@ namespace Nethermind.Merge.Plugin.Synchronization
 
             bool HasMoreToSync()
                 => currentNumber < _blockTree.BestKnownBeaconNumber &&
-                   bestPeer.HeadNumber > _blockTree.BestKnownNumber;
+                   bestPeer.HeadNumber > currentNumber;
 
             while (HasMoreToSync())
             {
@@ -213,22 +213,19 @@ namespace Nethermind.Merge.Plugin.Synchronization
                     bool blockExists =
                         _blockTree.FindBlock(currentBlock.Hash, BlockTreeLookupOptions.TotalDifficultyNotNeeded) !=
                         null;
-                    bool isKnownBlock = _blockTree.IsKnownBlock(currentBlock.Number, currentBlock.Hash) != null;
+                    bool isKnownBeaconBlock = _blockTree.IsKnownBeaconBlock(currentBlock.Number, currentBlock.Hash) != null;
                     BlockTreeSuggestOptions suggestOptions =
                         shouldProcess ? BlockTreeSuggestOptions.ShouldProcess : BlockTreeSuggestOptions.None;
                     if (_logger.IsTrace)
                         _logger.Trace(
-                            $"Current block {currentBlock}, BlockExists {blockExists} BeaconPivot: {_beaconPivot.PivotNumber}, IsKnownBlock: {isKnownBlock}");
-
-
-                    if (blockExists == false && isKnownBlock)
-                        _blockTree.Insert(currentBlock);
-                    if (isKnownBlock && shouldProcess)
+                            $"Current block {currentBlock}, BlockExists {blockExists} BeaconPivot: {_beaconPivot.PivotNumber}, IsKnownBlock: {isKnownBeaconBlock}");
+                    
+                    if (isKnownBeaconBlock)
                         suggestOptions |= BlockTreeSuggestOptions.FillBeaconBlock;
                     
                     if (_logger.IsTrace)
                         _logger.Trace(
-                            $"MergeBlockDownloader - SuggestBlock {currentBlock}, IsKnownBlock {isKnownBlock} ShouldProcess: {shouldProcess}");
+                            $"MergeBlockDownloader - SuggestBlock {currentBlock}, IsKnownBeaconBlock {isKnownBeaconBlock} ShouldProcess: {shouldProcess}");
                     if (HandleAddResult(bestPeer, currentBlock.Header, blockIndex == 0,
                             _blockTree.SuggestBlock(currentBlock, suggestOptions)))
                     {

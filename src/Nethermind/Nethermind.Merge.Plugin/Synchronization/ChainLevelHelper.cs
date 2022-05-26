@@ -16,7 +16,6 @@
 // 
 
 using System.Collections.Generic;
-using System.Threading.Tasks;
 using Nethermind.Blockchain;
 using Nethermind.Blockchain.Synchronization;
 using Nethermind.Core;
@@ -58,7 +57,12 @@ public class ChainLevelHelper : IChainLevelHelper
 
         List<BlockHeader> headers = new(maxCount);
         int i = 0;
-
+        if (_syncConfig.FastSync && startingPoint == _syncConfig.PivotNumberParsed)
+        {
+            i++;
+            startingPoint++;
+        }
+        
         while (i < maxCount)
         {
             ChainLevelInfo? level = _blockTree.FindLevel(startingPoint!.Value);
@@ -88,7 +92,17 @@ public class ChainLevelHelper : IChainLevelHelper
             }
 
             if ((beaconMainChainBlock.Metadata & (BlockMetadata.BeaconHeader | BlockMetadata.BeaconBody)) != 0)
-                newHeader.TotalDifficulty = beaconMainChainBlock.TotalDifficulty == 0 ? null : beaconMainChainBlock.TotalDifficulty;
+                if (_syncConfig.FastSync && startingPoint - 1 == _syncConfig.PivotNumberParsed)
+                {
+                    newHeader.TotalDifficulty = _syncConfig.PivotTotalDifficultyParsed + newHeader.Difficulty;
+                }
+                else
+                {
+                    newHeader.TotalDifficulty = beaconMainChainBlock.TotalDifficulty == 0
+                        ? null
+                        : beaconMainChainBlock.TotalDifficulty;
+                }
+
             if (_logger.IsTrace)
                 _logger.Trace(
                     $"ChainLevelHelper - A new block header {newHeader.ToString(BlockHeader.Format.FullHashAndNumber)}, header TD {newHeader.TotalDifficulty}");
@@ -112,7 +126,8 @@ public class ChainLevelHelper : IChainLevelHelper
             for (int i = 0; i < hashesToRequest.Count; i++)
             {
                 Block? block = _blockTree.FindBlock(hashesToRequest[i], BlockTreeLookupOptions.None);
-                context.SetBlock(i + offset, block);
+                BlockBody blockBody = new(block.Transactions, block.Uncles);
+                context.SetBody(i + offset, blockBody);
             }
 
             offset += hashesToRequest.Count;
