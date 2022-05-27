@@ -23,6 +23,7 @@ using Nethermind.Consensus;
 using Nethermind.Consensus.Validators;
 using Nethermind.Core.Specs;
 using Nethermind.Logging;
+using Nethermind.Merge.Plugin.Handlers;
 using Nethermind.Stats;
 using Nethermind.Synchronization;
 using Nethermind.Synchronization.Blocks;
@@ -45,6 +46,7 @@ namespace Nethermind.Merge.Plugin.Synchronization
         private readonly IBetterPeerStrategy _betterPeerStrategy;
         private readonly ILogManager _logManager;
         private readonly ISyncReport _syncReport;
+        private readonly IBlockCacheService _blockCacheService;
         private readonly IChainLevelHelper _chainLevelHelper;
 
         public MergeBlockDownloaderFactory(
@@ -60,6 +62,7 @@ namespace Nethermind.Merge.Plugin.Synchronization
             ISyncModeSelector syncModeSelector,
             ISyncConfig syncConfig,
             IBetterPeerStrategy betterPeerStrategy,
+            IBlockCacheService blockCacheService,
             ILogManager logManager)
         {
             _poSSwitcher = poSSwitcher;
@@ -73,6 +76,7 @@ namespace Nethermind.Merge.Plugin.Synchronization
             _betterPeerStrategy = betterPeerStrategy;
             _logManager = logManager;
             _chainLevelHelper = new ChainLevelHelper(_blockTree, syncConfig, _logManager);
+            _blockCacheService = blockCacheService;
 
             _syncReport = new SyncReport(_syncPeerPool, nodeStatsManager, syncModeSelector, syncConfig, beaconPivot, logManager);
         }
@@ -80,7 +84,8 @@ namespace Nethermind.Merge.Plugin.Synchronization
         public BlockDownloader Create(ISyncFeed<BlocksRequest?> syncFeed)
         {
             return new MergeBlockDownloader(_poSSwitcher, _beaconPivot, syncFeed, _syncPeerPool, _blockTree, _blockValidator,
-                _sealValidator, _syncReport, _receiptStorage, _specProvider, _betterPeerStrategy, _chainLevelHelper, _logManager);
+                _sealValidator, _syncReport, _receiptStorage, _specProvider, _betterPeerStrategy, _chainLevelHelper, _blockCacheService,
+                _logManager);
         }
     }
 }

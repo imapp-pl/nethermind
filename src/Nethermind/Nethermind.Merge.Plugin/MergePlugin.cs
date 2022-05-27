@@ -238,6 +238,7 @@ namespace Nethermind.Merge.Plugin
                     _api.SyncModeSelector!,
                     _syncConfig,
                     _api.BetterPeerStrategy!,
+                    _blockCacheService,
                     _api.LogManager);
                 _api.Synchronizer = new MergeSynchronizer(
                     _api.DbProvider, 
