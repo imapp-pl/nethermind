@@ -41,8 +41,10 @@ namespace Nethermind.Network.Test
         [TestCase(13_772_999, 0ul, "0xb715077d", 13_773_000ul, "Last London")]
         [TestCase(13_773_000, 0ul, "0x20c327fc", 15_050_000ul, "First Arrow Glacier")]
         [TestCase(15_049_999, 0ul, "0x20c327fc", 15_050_000ul, "Last Arrow Glacier")]
-        [TestCase(15_050_000, 0ul, "0xf0afd0e3", 0ul, "First Gray Glacier")]
-        [TestCase(20_000_000, 0ul, "0xf0afd0e3", 0ul, "Future Gray Glacier")]
+        [TestCase(15_050_000, 0ul, "0xf0afd0e3", 1681338455ul, "First Gray Glacier")]
+        [TestCase(15_051_000, 0ul, "0xf0afd0e3", 1681338455ul, "Future Gray Glacier")]
+        [TestCase(15_051_000, 1681338455ul, "0xdce96c2d", 0ul, "First Shanghai timestamp")]
+        [TestCase(15_051_000, 9981338455ul, "0xdce96c2d", 0ul, "Future Shanghai timestamp")]
         public void Fork_id_and_hash_as_expected(long head, ulong headTimestamp, string forkHashHex, ulong next, string description)
         {
             Test(head, headTimestamp, KnownHashes.MainnetGenesis, forkHashHex, next, description, MainnetSpecProvider.Instance, "foundation.json");
@@ -83,8 +85,8 @@ namespace Nethermind.Network.Test
         }
 
         [TestCase(15_050_000, 0ul, "0xf0afd0e3", 21_000_000ul, "First Gray Glacier")]
-        [TestCase(21_000_000, 0ul, "0x3f5fd195", 0ul, "First Merge Fork Id test")]
-        [TestCase(21_811_000, 0ul, "0x3f5fd195", 0ul, "Future Merge Fork Id test")]
+        [TestCase(21_000_000, 0ul, "0x3f5fd195", 1681338455UL, "First Merge Fork Id test")]
+        [TestCase(21_811_000, 0ul, "0x3f5fd195", 1681338455UL, "Future Merge Fork Id test")]
         public void Fork_id_and_hash_as_expected_with_merge_fork_id(long head, ulong headTimestamp, string forkHashHex, ulong next, string description)
         {
             ChainSpecLoader loader = new ChainSpecLoader(new EthereumJsonSerializer());
@@ -100,8 +102,10 @@ namespace Nethermind.Network.Test
         [TestCase(1_561_651L, 0ul, "0xc25efa5c", 4_460_644ul, "First Istanbul block")]
         [TestCase(4_460_644L, 0ul, "0x757a1c47", 5_062_605ul, "First Berlin block")]
         [TestCase(4_600_000L, 0ul, "0x757a1c47", 5_062_605ul, "Future Berlin block")]
-        [TestCase(5_062_605L, 0ul, "0xB8C6299D", 0ul, "First London block")]
-        [TestCase(6_000_000, 0ul, "0xB8C6299D", 0ul, "Future London block")]
+        [TestCase(5_062_605L, 0ul, "0xB8C6299D", 1678832736ul, "First London block")]
+        [TestCase(6_000_000, 0ul, "0xB8C6299D", 1678832736ul, "Future London block")]
+        [TestCase(6_000_001, 1678832736ul, "0xf9843abf", 0ul, "First Shanghai timestamp")]
+        [TestCase(6_000_001, 2678832736ul, "0xf9843abf", 0ul, "Future Shanghai timestamp")]
         public void Fork_id_and_hash_as_expected_on_goerli(long head, ulong headTimestamp, string forkHashHex, ulong next, string description)
         {
             Test(head, headTimestamp, KnownHashes.GoerliGenesis, forkHashHex, next, description, GoerliSpecProvider.Instance, "goerli.json");
@@ -151,7 +155,9 @@ namespace Nethermind.Network.Test
 
         [TestCase(0, 0ul, "0xFE3366E7", 1735371ul, "Sepolia genesis")]
         [TestCase(1735370, 0ul, "0xFE3366E7", 1735371ul, "Sepolia Last block before MergeForkIdTranstion")]
-        [TestCase(1735371, 0ul, "0xb96cbd13", 0ul, "First block - Sepolia MergeForkIdTransition")]
+        [TestCase(1735371, 0ul, "0xb96cbd13", 1677557088UL, "First block - Sepolia MergeForkIdTransition")]
+        [TestCase(1735372, 1677557088ul, "0xf7f9bc08", 0ul, "Shanghai")]
+        [TestCase(1735372, 2677557088ul, "0xf7f9bc08", 0ul, "Future Shanghai")]
         public void Fork_id_and_hash_as_expected_on_sepolia(long head, ulong headTimestamp, string forkHashHex, ulong next, string description)
         {
             Test(head, headTimestamp, KnownHashes.SepoliaGenesis, forkHashHex, next, description, SepoliaSpecProvider.Instance, "sepolia.json");

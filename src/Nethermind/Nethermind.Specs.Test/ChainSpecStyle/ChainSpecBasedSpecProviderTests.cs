@@ -178,7 +178,11 @@ namespace Nethermind.Specs.Test.ChainSpecStyle
 
             List<ForkActivation> forkActivationsToTest = new()
             {
-                (ForkActivation)120_000_000, // far in the future
+                new ForkActivation(2, 0),
+                new ForkActivation(120_000_000, 0),
+                new ForkActivation(1735372, 3),
+                new ForkActivation(1735372, 1677557088),
+                new ForkActivation(1735372, 1677557087)
             };
 
             CompareSpecProviders(sepolia, provider, forkActivationsToTest);
@@ -239,7 +243,8 @@ namespace Nethermind.Specs.Test.ChainSpecStyle
                 (ForkActivation)GoerliSpecProvider.BerlinBlockNumber,
                 (ForkActivation)(GoerliSpecProvider.LondonBlockNumber - 1),
                 (ForkActivation)GoerliSpecProvider.LondonBlockNumber,
-                (ForkActivation)100000000, // far in the future
+                new ForkActivation(GoerliSpecProvider.LondonBlockNumber + 1, GoerliSpecProvider.ShanghaiTimestamp),
+                new ForkActivation(GoerliSpecProvider.LondonBlockNumber + 1, GoerliSpecProvider.ShanghaiTimestamp + 100000000) // far in future
             };
 
             CompareSpecProviders(goerli, provider, forkActivationsToTest);
@@ -288,7 +293,8 @@ namespace Nethermind.Specs.Test.ChainSpecStyle
                 (ForkActivation)MainnetSpecProvider.ArrowGlacierBlockNumber,
                 (ForkActivation)(MainnetSpecProvider.GrayGlacierBlockNumber - 1),
                 (ForkActivation)MainnetSpecProvider.GrayGlacierBlockNumber,
-                (ForkActivation)99_000_000, // far in the future
+                MainnetSpecProvider.ShanghaiActivation,
+                new ForkActivation(99_000_000, 99_681_338_455) // far in the future
             };
 
             CompareSpecProviders(mainnet, provider, forkActivationsToTest);
