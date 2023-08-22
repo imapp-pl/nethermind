@@ -28,9 +28,9 @@ namespace Nethermind.Benchmark.Runner
             AddDiagnoser(BenchmarkDotNet.Diagnosers.MemoryDiagnoser.Default);
             WithSummaryStyle(SummaryStyle.Default.WithMaxParameterColumnWidth(100));
 
-            if (filters.Any()) 
+            if (filters.Any())
             {
-                IFilter[] nameFilters = filters.Select(a => new SimpleFilter(c => c.Parameters.Items.Any(p=>p.Value.ToString().Contains(a)))).OfType<IFilter>().ToArray();
+                IFilter[] nameFilters = filters.Select(a => new SimpleFilter(c => c.Parameters.Items.Any(p => p.Value.ToString().Contains(a)))).OfType<IFilter>().ToArray();
                 AddFilter(new DisjunctionFilter(nameFilters));
             }
         }
@@ -51,10 +51,11 @@ namespace Nethermind.Benchmark.Runner
             AddLogger(new BenchmarkNullLogger());
             AddExporter(new BenchmarkNullExporter());
             AddDiagnoser(BenchmarkDotNet.Diagnosers.MemoryDiagnoser.Default);
+            WithOptions(ConfigOptions.DisableLogFile);
 
-            if (filters.Any()) 
+            if (filters.Any())
             {
-                IFilter[] nameFilters = filters.Select(a => new SimpleFilter(c => c.Parameters.Items.Any(p=>p.Value.ToString().Contains(a)))).OfType<IFilter>().ToArray();
+                IFilter[] nameFilters = filters.Select(a => new SimpleFilter(c => c.Parameters.Items.Any(p => p.Value.ToString().Contains(a)))).OfType<IFilter>().ToArray();
                 AddFilter(new DisjunctionFilter(nameFilters));
             }
         }
@@ -97,7 +98,7 @@ namespace Nethermind.Benchmark.Runner
 
         public void Write(BenchmarkDotNet.Loggers.LogKind logKind, string text)
         {
-            if (logKind == BenchmarkDotNet.Loggers.LogKind.Statistic) 
+            if (logKind == BenchmarkDotNet.Loggers.LogKind.Statistic)
             {
                 Console.Write(text);
                 skipEmptyLine = false;
@@ -106,7 +107,7 @@ namespace Nethermind.Benchmark.Runner
 
         public void WriteLine()
         {
-            if (!skipEmptyLine) 
+            if (!skipEmptyLine)
             {
                 Console.WriteLine();
                 skipEmptyLine = true;
@@ -116,15 +117,15 @@ namespace Nethermind.Benchmark.Runner
         public void WriteLine(BenchmarkDotNet.Loggers.LogKind logKind, string text)
         {
             if (
-                logKind == BenchmarkDotNet.Loggers.LogKind.Statistic && 
-                (text.StartsWith("|") || text.StartsWith("-"))) 
-                {
-                    Console.WriteLine(text);
-                    skipEmptyLine = false;
-                }
+                logKind == BenchmarkDotNet.Loggers.LogKind.Statistic &&
+                (text.StartsWith("|") || text.StartsWith("-")))
+            {
+                Console.WriteLine(text);
+                skipEmptyLine = false;
+            }
         }
     }
-    
+
     public class BenchmarkNullExporter : IExporter
     {
         public string Name => "ImappNullExporter";
@@ -137,5 +138,5 @@ namespace Nethermind.Benchmark.Runner
         public void ExportToLog(Summary summary, ILogger logger)
         {
         }
-    }    
+    }
 }

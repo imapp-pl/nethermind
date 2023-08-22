@@ -18,6 +18,7 @@ using Nethermind.Specs.Forks;
 using static Microsoft.FSharp.Core.ByRefKinds;
 using Nethermind.Evm.Precompiles;
 using Nethermind.Core.Extensions;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace Nethermind.Benchmark.Runner
 {
@@ -30,17 +31,18 @@ namespace Nethermind.Benchmark.Runner
 
             [Option('f', "filter", Required = false, HelpText = "Use to filter tests by name(s)")]
             public IEnumerable<string> Filter { get; set; }
+
+            [Option('b', "bytecode", Required = false, HelpText = "Hex encoded bytecode")]
+            public string ByteCode { get; set; }
         }
 
 
         static void Main(string[] args)
         {
             IConfig config = new DashboardConfig(Enumerable.Empty<string>(), Job.MediumRun.WithRuntime(CoreRuntime.Core70));
-            List<Assembly> assemblies = new List<Assembly>();
-
 
             Parser.Default.ParseArguments<Options>(args)
-                .WithParsed<Options>(o =>
+                .WithParsed(o =>
                 {
                     switch (o.Mode)
                     {
@@ -59,10 +61,53 @@ namespace Nethermind.Benchmark.Runner
                         case "precompilesBytecodeDirect":
                             ExecutePrecompilesBytecodeDirect(o.Filter);
                             break;
+                        case "bytecode":
+                            ExecuteBytecodeDirect(o.ByteCode);
+                            break;
                         default:
                             throw new Exception("Unknown mode");
                     }
                 });
+        }
+
+        private static void ExecuteBytecodeDirect(string byteCode)
+        {
+            var config = new NoOutputConfig(
+                Array.Empty<string>(),
+                Job.LongRun
+                    .WithRuntime(CoreRuntime.Core70)
+                    .WithToolchain(BenchmarkDotNet.Toolchains.InProcess.NoEmit.InProcessNoEmitToolchain.Instance)
+            );
+
+            Environment.SetEnvironmentVariable("NETH.BENCHMARK.BYTECODE", "00" + byteCode);
+            var summary1 = BenchmarkRunner.Run<BytecodeBenchmark>(config);
+
+            Environment.SetEnvironmentVariable("NETH.BENCHMARK.BYTECODE", byteCode);
+            var summary2 = BenchmarkRunner.Run<BytecodeBenchmark>(config);
+
+            if (summary1.HasCriticalValidationErrors || summary1.ValidationErrors.Any())
+            {
+                var a = String.Join('|', summary1.ValidationErrors.Select(ve => ve.Message));
+                throw new Exception(a);
+            }
+
+            OutputOverheadResults(1, summary1, summary2);
+        }
+
+        private static void OutputOverheadResults(int sampleId, Summary rEmpty, Summary rActual)
+        {
+
+            var reportEmpty = rEmpty.Reports[0];
+            var reportActual = rActual.Reports[0];
+            var overheadTime = reportEmpty.ResultStatistics?.Mean;
+
+
+            var loopExecutionTime = reportActual.ResultStatistics.Mean - reportEmpty.ResultStatistics.Mean;
+            var totalTime = reportActual.ResultStatistics.Mean;
+
+            var memAllocPerOp = reportActual.GcStats.GetBytesAllocatedPerOperation(reportActual.BenchmarkCase);
+
+            Console.WriteLine($"{sampleId},{reportActual.ResultStatistics.N},{overheadTime},{loopExecutionTime},{totalTime},{reportActual.ResultStatistics.StandardDeviation},{reportActual.GcStats.TotalOperations},{memAllocPerOp}");
         }
 
         private static void ExecuteFullBenchmark(IEnumerable<string> filters)
@@ -71,12 +116,12 @@ namespace Nethermind.Benchmark.Runner
 
             Assembly[] assemblies =
             {
-                typeof(Nethermind.JsonRpc.Benchmark.EthModuleBenchmarks).Assembly,
-                typeof(Nethermind.Benchmarks.Core.Keccak256Benchmarks).Assembly,
-                typeof(Nethermind.Evm.Benchmark.EvmStackBenchmarks).Assembly,
-                typeof(Nethermind.Network.Benchmarks.DiscoveryBenchmarks).Assembly,
-                typeof(Nethermind.Precompiles.Benchmark.KeccakBenchmark).Assembly,
-                typeof(Nethermind.EthereumTests.Benchmark.EthereumTests).Assembly,
+                typeof(JsonRpc.Benchmark.EthModuleBenchmarks).Assembly,
+                typeof(Benchmarks.Core.Keccak256Benchmarks).Assembly,
+                typeof(Evm.Benchmark.EvmStackBenchmarks).Assembly,
+                typeof(Network.Benchmarks.DiscoveryBenchmarks).Assembly,
+                typeof(Precompiles.Benchmark.KeccakBenchmark).Assembly,
+                typeof(EthereumTests.Benchmark.EthereumTests).Assembly,
             };
 
             if (Debugger.IsAttached)
@@ -124,16 +169,16 @@ namespace Nethermind.Benchmark.Runner
         {
             var benchmarkTypes = new[]
             {
-                typeof(Nethermind.Precompiles.Benchmark.Blake2fBenchmark),
-                typeof(Nethermind.Precompiles.Benchmark.Bn256AddBenchmark),
-                typeof(Nethermind.Precompiles.Benchmark.Bn256MulBenchmark),
-                typeof(Nethermind.Precompiles.Benchmark.Bn256PairingBenchmark),
-                typeof(Nethermind.Precompiles.Benchmark.EcRecoverBenchmark),
-                typeof(Nethermind.Precompiles.Benchmark.KeccakBenchmark),
-                typeof(Nethermind.Precompiles.Benchmark.ModExpBenchmark),
-                typeof(Nethermind.Precompiles.Benchmark.PointEvaluationBenchmark),
-                typeof(Nethermind.Precompiles.Benchmark.RipEmdBenchmark),
-                typeof(Nethermind.Precompiles.Benchmark.Sha256Benchmark),
+                typeof(Precompiles.Benchmark.Blake2fBenchmark),
+                typeof(Precompiles.Benchmark.Bn256AddBenchmark),
+                typeof(Precompiles.Benchmark.Bn256MulBenchmark),
+                typeof(Precompiles.Benchmark.Bn256PairingBenchmark),
+                typeof(Precompiles.Benchmark.EcRecoverBenchmark),
+                typeof(Precompiles.Benchmark.KeccakBenchmark),
+                typeof(Precompiles.Benchmark.ModExpBenchmark),
+                typeof(Precompiles.Benchmark.PointEvaluationBenchmark),
+                typeof(Precompiles.Benchmark.RipEmdBenchmark),
+                typeof(Precompiles.Benchmark.Sha256Benchmark),
             };
 
             var config = new NoOutputConfig(filters, Job.ShortRun.WithRuntime(CoreRuntime.Core70));
