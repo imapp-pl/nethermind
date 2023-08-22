@@ -6,33 +6,33 @@
     <TieredPGO>true</TieredPGO>
   </PropertyGroup>
 
-    <ItemGroup>
-      <PackageReference Include="BenchmarkDotNet" />
-      <PackageReference Include="CommandLineParser" Version="2.9.1" />
-      <PackageReference Include="Newtonsoft.Json" Version="13.0.2" />
-    </ItemGroup>
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" />
+    <PackageReference Include="CommandLineParser" />
+    <PackageReference Include="Newtonsoft.Json" />
+  </ItemGroup>
 
-    <ItemGroup>
-      <ProjectReference Include="..\Nethermind.Benchmark.Bytecode\Nethermind.Benchmark.Bytecode.csproj" />
-      <ProjectReference Include="..\Nethermind.Benchmark\Nethermind.Benchmark.csproj" />
-      <ProjectReference Include="..\Nethermind.EthereumTests.Benchmark\Nethermind.EthereumTests.Benchmark.csproj" />
-      <ProjectReference Include="..\Nethermind.Evm.Benchmark\Nethermind.Evm.Benchmark.csproj" />
-      <ProjectReference Include="..\Nethermind.JsonRpc.Benchmark\Nethermind.JsonRpc.Benchmark.csproj" />
-      <ProjectReference Include="..\Nethermind.Network.Benchmark\Nethermind.Network.Benchmark.csproj" />
-      <ProjectReference Include="..\Nethermind.Precompiles.Benchmark\Nethermind.Precompiles.Benchmark.csproj" />
-    </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Nethermind.Benchmark.Bytecode\Nethermind.Benchmark.Bytecode.csproj" />
+    <ProjectReference Include="..\Nethermind.Benchmark\Nethermind.Benchmark.csproj" />
+    <ProjectReference Include="..\Nethermind.EthereumTests.Benchmark\Nethermind.EthereumTests.Benchmark.csproj" />
+    <ProjectReference Include="..\Nethermind.Evm.Benchmark\Nethermind.Evm.Benchmark.csproj" />
+    <ProjectReference Include="..\Nethermind.JsonRpc.Benchmark\Nethermind.JsonRpc.Benchmark.csproj" />
+    <ProjectReference Include="..\Nethermind.Network.Benchmark\Nethermind.Network.Benchmark.csproj" />
+    <ProjectReference Include="..\Nethermind.Precompiles.Benchmark\Nethermind.Precompiles.Benchmark.csproj" />
+  </ItemGroup>
 
-    <ItemGroup>
-      <Content Include="..\..\tests\bytecodes\precompiles\*.*">
-        <Link>bytecodes\precompiles\%(RecursiveDir)%(FileName)%(Extension)</Link>
-        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      </Content>
-    </ItemGroup>
+  <ItemGroup>
+    <Content Include="..\..\tests\bytecodes\precompiles\*.*">
+      <Link>bytecodes\precompiles\%(RecursiveDir)%(FileName)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
 
-    <ItemGroup>
-      <None Update="bytecodes\precompiles\all.json">
-        <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-      </None>
-    </ItemGroup>
+  <ItemGroup>
+    <None Update="bytecodes\precompiles\all.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
 
 </Project>

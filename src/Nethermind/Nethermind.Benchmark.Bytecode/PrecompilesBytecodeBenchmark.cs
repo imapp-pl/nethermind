@@ -33,9 +33,7 @@ namespace Nethermind.Benchmark.Bytecode
         private BlockHeader _header = new BlockHeader(Keccak.Zero, Keccak.Zero, Address.Zero, UInt256.One, MainnetSpecProvider.GrayGlacierBlockNumber, Int64.MaxValue, MainnetSpecProvider.CancunBlockTimestamp, Bytes.Empty);
         private IBlockhashProvider _blockhashProvider = new TestBlockhashProvider();
         private EvmState _evmState;
-        private StateProvider _stateProvider;
-        private StorageProvider _storageProvider;
-        private WorldState _worldState;
+        private WorldState _stateProvider;
 
         [GlobalSetup]
         public void GlobalSetup()
@@ -43,37 +41,37 @@ namespace Nethermind.Benchmark.Bytecode
             TrieStore trieStore = new(new MemDb(), new OneLoggerLogManager(NullLogger.Instance));
             IKeyValueStore codeDb = new MemDb();
 
-            _stateProvider = new StateProvider(trieStore, codeDb, new OneLoggerLogManager(NullLogger.Instance));
+            _stateProvider = new WorldState(trieStore, codeDb, new OneLoggerLogManager(NullLogger.Instance));
             _stateProvider.CreateAccount(Address.Zero, 1000.Ether());
             _stateProvider.Commit(_spec);
 
-            _storageProvider = new StorageProvider(trieStore, _stateProvider, new OneLoggerLogManager(NullLogger.Instance));
-
-            _worldState = new WorldState(_stateProvider, _storageProvider);
-
-            _virtualMachine = new VirtualMachine(_blockhashProvider, MainnetSpecProvider.Instance, new OneLoggerLogManager(NullLogger.Instance));
+            _virtualMachine = new VirtualMachine(_blockhashProvider, MainnetSpecProvider.Instance, LimboLogs.Instance);
         }
 
         [IterationSetup]
         public void Setup()
         {
+            var ByteCode = Input.Bytecode;
+
             _environment = new ExecutionEnvironment
-            {
-                ExecutingAccount = Address.Zero,
-                CodeSource = Address.Zero,
-                Caller = Address.Zero,
-                CodeInfo = new CodeInfo(Input.Bytecode),
-                Value = 0,
-                TransferValue = 0,
-                TxExecutionContext = new TxExecutionContext(_header, Address.Zero, 0, Array.Empty<byte[]>())
-            };
-            _evmState = new EvmState(long.MaxValue, _environment, ExecutionType.Transaction, true, _worldState.TakeSnapshot(), false);
+            (
+                executingAccount: Address.Zero,
+                codeSource: Address.Zero,
+                caller: Address.Zero,
+                codeInfo: new CodeInfo(ByteCode),
+                value: 0,
+                transferValue: 0,
+                txExecutionContext: new TxExecutionContext(_header, Address.Zero, 0, null),
+                inputData: default
+            );
+
+            _evmState = new EvmState(long.MaxValue, _environment, ExecutionType.Transaction, true, _stateProvider.TakeSnapshot(), false);
         }
 
         [Benchmark]
         public void ExecuteCode()
         {
-            var ts = _virtualMachine.Run(_evmState, _worldState, _txTracer);
+            var ts = _virtualMachine.Run(_evmState, _stateProvider, _txTracer);
             if (ts.IsError)
             {
                 throw new Exception("Execution failed: " + ts.Error);
@@ -84,7 +82,6 @@ namespace Nethermind.Benchmark.Bytecode
         public void Cleanup()
         {
             _stateProvider.Reset();
-            _storageProvider.Reset();
         }
 
         [ParamsSource(nameof(Inputs))]

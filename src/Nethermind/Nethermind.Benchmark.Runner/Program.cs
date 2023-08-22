@@ -170,9 +170,6 @@ namespace Nethermind.Benchmark.Runner
             var benchmarkTypes = new[]
             {
                 typeof(Precompiles.Benchmark.Blake2fBenchmark),
-                typeof(Precompiles.Benchmark.Bn256AddBenchmark),
-                typeof(Precompiles.Benchmark.Bn256MulBenchmark),
-                typeof(Precompiles.Benchmark.Bn256PairingBenchmark),
                 typeof(Precompiles.Benchmark.EcRecoverBenchmark),
                 typeof(Precompiles.Benchmark.KeccakBenchmark),
                 typeof(Precompiles.Benchmark.ModExpBenchmark),
