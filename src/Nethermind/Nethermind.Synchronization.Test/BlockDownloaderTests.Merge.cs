@@ -275,7 +275,7 @@ public partial class BlockDownloaderTests
 
         CancellationTokenSource cts = new CancellationTokenSource();
 
-        Task ignored = ctx.BlockDownloader.Start(cts.Token);
+        Task ignored = ctx.Dispatcher.Start(cts.Token);
         await Task.Delay(TimeSpan.FromMilliseconds(100));
 
         // Feed should activate and allocate the first peer
@@ -304,6 +304,56 @@ public partial class BlockDownloaderTests
         Assert.That(() => accidentalDeadlockTask.IsCompleted, Is.True.After(1000, 100));
         cts.Cancel();
         cts.Dispose();
+    }
+
+    [Test]
+    public async Task No_old_bodies_and_receipts()
+    {
+        BlockTreeTests.BlockTreeTestScenario.ScenarioBuilder blockTrees = BlockTreeTests.BlockTreeTestScenario
+            .GoesLikeThis()
+            .WithBlockTrees(4, 129)
+            .InsertBeaconPivot(64)
+            .InsertBeaconHeaders(4, 128);
+        BlockTree syncedTree = blockTrees.SyncedTree;
+        PostMergeContext ctx = new();
+        ctx.BlockTreeScenario = blockTrees;
+
+        ctx.Feed = new FastSyncFeed(ctx.SyncModeSelector,
+            new SyncConfig
+            {
+                NonValidatorNode = true,
+                DownloadBodiesInFastSync = false,
+                DownloadReceiptsInFastSync = false
+            }, LimboLogs.Instance);
+
+        ctx.BeaconPivot.EnsurePivot(blockTrees.SyncedTree.FindHeader(64, BlockTreeLookupOptions.None));
+
+        SyncPeerMock syncPeer = new(syncedTree, false, Response.AllCorrect, 34000000);
+        PeerInfo peerInfo = new(syncPeer);
+
+        IPeerAllocationStrategy peerAllocationStrategy = Substitute.For<IPeerAllocationStrategy>();
+
+        peerAllocationStrategy
+            .Allocate(Arg.Any<PeerInfo?>(), Arg.Any<IEnumerable<PeerInfo>>(), Arg.Any<INodeStatsManager>(), Arg.Any<IBlockTree>())
+            .Returns(peerInfo);
+        SyncPeerAllocation peerAllocation = new(peerAllocationStrategy, AllocationContexts.Blocks);
+        peerAllocation.AllocateBestPeer(new List<PeerInfo>(), Substitute.For<INodeStatsManager>(), ctx.BlockTree);
+
+        ctx.PeerPool
+            .Allocate(Arg.Any<IPeerAllocationStrategy>(), Arg.Any<AllocationContexts>(), Arg.Any<int>())
+            .Returns(Task.FromResult(peerAllocation));
+
+        ctx.Feed.Activate();
+
+        CancellationTokenSource cts = new();
+        ctx.Dispatcher.Start(cts.Token);
+
+        Assert.That(
+            () => ctx.BlockTree.BestKnownNumber,
+            Is.EqualTo(96).After(3000, 100)
+        );
+
+        cts.Cancel();
     }
 
     [TestCase(DownloaderOptions.WithReceipts)]
@@ -417,7 +467,7 @@ public partial class BlockDownloaderTests
         {
             get
             {
-                return _mergeBlockDownloader ?? new(
+                return _mergeBlockDownloader ??= new(
                     PosSwitcher,
                     BeaconPivot,
                     Feed,
@@ -434,5 +484,10 @@ public partial class BlockDownloaderTests
                     LimboLogs.Instance);
             }
         }
+
+        private IPeerAllocationStrategyFactory<BlocksRequest>? _peerAllocationStrategy;
+        protected override IPeerAllocationStrategyFactory<BlocksRequest> PeerAllocationStrategy =>
+            _peerAllocationStrategy ??= new MergeBlocksSyncPeerAllocationStrategyFactory(PosSwitcher, BeaconPivot, LimboLogs.Instance);
+
     }
 }

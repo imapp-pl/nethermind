@@ -11,6 +11,8 @@ namespace Nethermind.Core.Specs
     /// </summary>
     public interface ISpecProvider
     {
+        public const ulong TimestampForkNever = ulong.MaxValue;
+
         /// <summary>
         /// The merge block number is different from the rest forks because we don't know the merge block before it happens.
         /// This function handles change of the merge block
@@ -27,6 +29,11 @@ namespace Nethermind.Core.Specs
         /// This block number doesn't affect fork_id calculation and it isn't included in ISpecProvider.TransitionsBlocks
         /// </summary>
         ForkActivation? MergeBlockNumber { get; }
+
+        /// <summary>
+        /// Gets the first time the fork is activated by timestamp
+        /// </summary>
+        ulong TimestampFork { get; }
 
         UInt256? TerminalTotalDifficulty { get; }
 
@@ -68,7 +75,10 @@ namespace Nethermind.Core.Specs
         /// <summary>
         /// Resolves a spec for all planned forks applied.
         /// </summary>
-        /// <returns>A spec for all planned forks applied</returns>
-        IReleaseSpec GetFinalSpec() => GetSpec(long.MaxValue, ulong.MaxValue);
+        /// <returns>A spec for all planned forks applied</
+        /// <remarks> The default value is long.MaxValue for block numbers and ulong.MaxValue for timestamps
+        /// for every new not yet scheduled EIP. Because of that we can't use long.MaxValue and
+        /// ulong.MaxValue for GetFinalSpec that is why we have long.MaxValue-1, ulong.MaxValue-1 </remarks>
+        IReleaseSpec GetFinalSpec() => GetSpec(long.MaxValue - 1, ulong.MaxValue - 1);
     }
 }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-FileCopyrightText: 2023 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using Nethermind.Blockchain;
 using Nethermind.Blockchain.Find;
 using Nethermind.Blockchain.Receipts;
+using Nethermind.Config;
 using Nethermind.Consensus;
 using Nethermind.Consensus.Comparers;
 using Nethermind.Consensus.Processing;
@@ -21,31 +22,29 @@ using Nethermind.Core.Specs;
 using Nethermind.Core.Test.Builders;
 using Nethermind.Crypto;
 using Nethermind.Db;
-using Nethermind.Int256;
+using Nethermind.Db.Blooms;
 using Nethermind.Evm;
+using Nethermind.Evm.TransactionProcessing;
+using Nethermind.Int256;
 using Nethermind.Logging;
 using Nethermind.Serialization.Json;
 using Nethermind.Specs;
+using Nethermind.Specs.Test;
 using Nethermind.State;
 using Nethermind.State.Repositories;
-using Nethermind.Db.Blooms;
-using Nethermind.Evm.TransactionProcessing;
-using Nethermind.Specs.Test;
 using Nethermind.Trie.Pruning;
 using Nethermind.TxPool;
 using BlockTree = Nethermind.Blockchain.BlockTree;
-using Nethermind.Config;
 
 namespace Nethermind.Core.Test.Blockchain;
 
 public class TestBlockchain : IDisposable
 {
-    public const int DefaultTimeout = 4000;
+    public const int DefaultTimeout = 10000;
     public IStateReader StateReader { get; private set; } = null!;
     public IEthereumEcdsa EthereumEcdsa { get; private set; } = null!;
     public INonceManager NonceManager { get; private set; } = null!;
     public TransactionProcessor TxProcessor { get; set; } = null!;
-    public IStorageProvider Storage { get; set; } = null!;
     public IReceiptStorage ReceiptStorage { get; set; } = null!;
     public ITxPool TxPool { get; set; } = null!;
     public IDb CodeDb => DbProvider.CodeDb;
@@ -65,7 +64,7 @@ public class TestBlockchain : IDisposable
 
     public ILogFinder LogFinder { get; private set; } = null!;
     public IJsonSerializer JsonSerializer { get; set; } = null!;
-    public IStateProvider State { get; set; } = null!;
+    public IWorldState State { get; set; } = null!;
     public IReadOnlyStateProvider ReadOnlyState { get; private set; } = null!;
     public IDb StateDb => DbProvider.StateDb;
     public TrieStore TrieStore { get; set; } = null!;
@@ -116,18 +115,16 @@ public class TestBlockchain : IDisposable
         EthereumEcdsa = new EthereumEcdsa(SpecProvider.ChainId, LogManager);
         DbProvider = await CreateDbProvider();
         TrieStore = new TrieStore(StateDb, LogManager);
-        State = new StateProvider(TrieStore, DbProvider.CodeDb, LogManager);
+        State = new WorldState(TrieStore, DbProvider.CodeDb, LogManager);
         State.CreateAccount(TestItem.AddressA, (initialValues ?? InitialValue));
         State.CreateAccount(TestItem.AddressB, (initialValues ?? InitialValue));
         State.CreateAccount(TestItem.AddressC, (initialValues ?? InitialValue));
+
         byte[] code = Bytes.FromHexString("0xabcd");
         Keccak codeHash = Keccak.Compute(code);
-        State.UpdateCode(code);
-        State.UpdateCodeHash(TestItem.AddressA, codeHash, SpecProvider.GenesisSpec);
+        State.InsertCode(TestItem.AddressA, code, SpecProvider.GenesisSpec);
 
-        Storage = new StorageProvider(TrieStore, State, LogManager);
-        Storage.Set(new StorageCell(TestItem.AddressA, UInt256.One), Bytes.FromHexString("0xabcdef"));
-        Storage.Commit();
+        State.Set(new StorageCell(TestItem.AddressA, UInt256.One), Bytes.FromHexString("0xabcdef"));
 
         State.Commit(SpecProvider.GenesisSpec);
         State.CommitTree(0);
@@ -152,7 +149,7 @@ public class TestBlockchain : IDisposable
 
         ReceiptStorage = new InMemoryReceiptStorage();
         VirtualMachine virtualMachine = new(new BlockhashProvider(BlockTree, LogManager), SpecProvider, LogManager);
-        TxProcessor = new TransactionProcessor(SpecProvider, State, Storage, virtualMachine, LogManager);
+        TxProcessor = new TransactionProcessor(SpecProvider, State, virtualMachine, LogManager);
         BlockPreprocessorStep = new RecoverSignatures(EthereumEcdsa, TxPool, SpecProvider, LogManager);
         HeaderValidator = new HeaderValidator(BlockTree, Always.Valid, SpecProvider, LogManager);
 
@@ -318,7 +315,6 @@ public class TestBlockchain : IDisposable
             NoBlockRewards.Instance,
             new BlockProcessor.BlockValidationTransactionsExecutor(TxProcessor, State),
             State,
-            Storage,
             ReceiptStorage,
             NullWitnessCollector.Instance,
             LogManager);

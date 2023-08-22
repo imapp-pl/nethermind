@@ -12,14 +12,11 @@ namespace Nethermind.Merge.Plugin.Handlers;
 
 public class ExchangeCapabilitiesHandler : IHandler<IEnumerable<string>, IEnumerable<string>>
 {
-    private static readonly TimeSpan _timeout = TimeSpan.FromSeconds(1);
-
     private readonly ILogger _logger;
     private readonly IRpcCapabilitiesProvider _engineRpcCapabilitiesProvider;
 
-    public ExchangeCapabilitiesHandler(IRpcCapabilitiesProvider engineRpcCapabilitiesProvider, ISpecProvider specProvider, ILogManager logManager)
+    public ExchangeCapabilitiesHandler(IRpcCapabilitiesProvider engineRpcCapabilitiesProvider, ILogManager logManager)
     {
-        ArgumentNullException.ThrowIfNull(specProvider);
         ArgumentNullException.ThrowIfNull(logManager);
 
         _logger = logManager.GetClassLogger();
@@ -28,21 +25,21 @@ public class ExchangeCapabilitiesHandler : IHandler<IEnumerable<string>, IEnumer
 
     public ResultWrapper<IEnumerable<string>> Handle(IEnumerable<string> methods)
     {
-        var capabilities = _engineRpcCapabilitiesProvider.GetEngineCapabilities();
+        IReadOnlyDictionary<string, (bool Enabled, bool WarnIfMissing)> capabilities = _engineRpcCapabilitiesProvider.GetEngineCapabilities();
         CheckCapabilities(methods, capabilities);
 
-        return ResultWrapper<IEnumerable<string>>.Success(capabilities.Keys);
+        return ResultWrapper<IEnumerable<string>>.Success(capabilities.Where(x => x.Value.Enabled).Select(x => x.Key));
     }
 
-    private void CheckCapabilities(IEnumerable<string> methods, IReadOnlyDictionary<string, bool> capabilities)
+    private void CheckCapabilities(IEnumerable<string> methods, IReadOnlyDictionary<string, (bool Enabled, bool WarnIfMissing)> capabilities)
     {
-        var missing = new List<string>();
+        List<string> missing = new();
 
-        foreach (var capability in capabilities)
+        foreach (KeyValuePair<string, (bool Enabled, bool WarnIfMissing)> capability in capabilities)
         {
-            var found = false;
+            bool found = false;
 
-            foreach (var method in methods)
+            foreach (string method in methods)
                 if (method.Equals(capability.Key, StringComparison.Ordinal))
                 {
                     found = true;
@@ -50,7 +47,7 @@ public class ExchangeCapabilitiesHandler : IHandler<IEnumerable<string>, IEnumer
                 }
 
             // Warn if not found and capability activated
-            if (!found && capability.Value)
+            if (!found && capability.Value is { Enabled: true, WarnIfMissing: true })
                 missing.Add(capability.Key);
         }
 

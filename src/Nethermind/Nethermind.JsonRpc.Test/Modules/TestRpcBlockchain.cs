@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
+using System.IO;
 using System.Threading.Tasks;
 using Nethermind.Blockchain;
 using Nethermind.Blockchain.Filters;
@@ -8,7 +9,6 @@ using Nethermind.Blockchain.Find;
 using Nethermind.Blockchain.Receipts;
 using Nethermind.Blockchain.Synchronization;
 using Nethermind.Consensus.Processing;
-using Nethermind.Core;
 using Nethermind.Core.Specs;
 using Nethermind.Core.Test.Blockchain;
 using Nethermind.Core.Test.Builders;
@@ -18,7 +18,6 @@ using Nethermind.Facade;
 using Nethermind.JsonRpc.Modules;
 using Nethermind.JsonRpc.Modules.Eth;
 using Nethermind.Logging;
-using Nethermind.Db.Blooms;
 using Nethermind.Facade.Eth;
 using Nethermind.Int256;
 using Nethermind.JsonRpc.Modules.Eth.GasPrice;
@@ -31,6 +30,7 @@ using Nethermind.TxPool;
 using Nethermind.Wallet;
 using Newtonsoft.Json;
 using Nethermind.Config;
+using Nethermind.Synchronization.ParallelSync;
 
 namespace Nethermind.JsonRpc.Test.Modules
 {
@@ -43,8 +43,11 @@ namespace Nethermind.JsonRpc.Test.Modules
         public IReceiptFinder ReceiptFinder { get; private set; } = null!;
         public IGasPriceOracle GasPriceOracle { get; private set; } = null!;
 
-        public IKeyStore KeyStore { get; } = new MemKeyStore(TestItem.PrivateKeys);
-        public IWallet TestWallet { get; } = new DevKeyStoreWallet(new MemKeyStore(TestItem.PrivateKeys), LimboLogs.Instance);
+        public IKeyStore KeyStore { get; } = new MemKeyStore(TestItem.PrivateKeys, Path.Combine("testKeyStoreDir", Path.GetRandomFileName()));
+        public IWallet TestWallet { get; } =
+            new DevKeyStoreWallet(new MemKeyStore(TestItem.PrivateKeys, Path.Combine("testKeyStoreDir", Path.GetRandomFileName())),
+                LimboLogs.Instance);
+
         public IFeeHistoryOracle? FeeHistoryOracle { get; private set; }
         public static Builder<TestRpcBlockchain> ForTest(string sealEngineType) => ForTest<TestRpcBlockchain>(sealEngineType);
 
@@ -111,7 +114,6 @@ namespace Nethermind.JsonRpc.Test.Modules
             IFilterStore filterStore = new FilterStore();
             IFilterManager filterManager = new FilterManager(filterStore, BlockProcessor, TxPool, LimboLogs.Instance);
 
-
             ReadOnlyTxProcessingEnv processingEnv = new(
                 new ReadOnlyDbProvider(DbProvider, false),
                 new TrieStore(DbProvider.StateDb, LimboLogs.Instance).AsReadOnly(),
@@ -143,7 +145,7 @@ namespace Nethermind.JsonRpc.Test.Modules
                 LimboLogs.Instance,
                 SpecProvider,
                 GasPriceOracle,
-                new EthSyncingInfo(BlockTree, ReceiptStorage, syncConfig, LogManager),
+                new EthSyncingInfo(BlockTree, ReceiptStorage, syncConfig, new StaticSelector(SyncMode.All), LogManager),
                 FeeHistoryOracle);
 
             return this;
