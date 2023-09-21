@@ -91,10 +91,10 @@ namespace Nethermind.Benchmark.Runner
                 throw new Exception(a);
             }
 
-            OutputOverheadResults(1, summary1, summary2);
+            OutputOverheadResults(summary1, summary2);
         }
 
-        private static void OutputOverheadResults(int sampleId, Summary rEmpty, Summary rActual)
+        private static void OutputOverheadResults(Summary rEmpty, Summary rActual)
         {
 
             var reportEmpty = rEmpty.Reports[0];
@@ -107,7 +107,7 @@ namespace Nethermind.Benchmark.Runner
 
             var memAllocPerOp = reportActual.GcStats.GetBytesAllocatedPerOperation(reportActual.BenchmarkCase);
 
-            Console.WriteLine($"{sampleId},{reportActual.ResultStatistics.N},{overheadTime},{loopExecutionTime},{totalTime},{reportActual.ResultStatistics.StandardDeviation},{reportActual.GcStats.TotalOperations},{memAllocPerOp}");
+            Console.WriteLine($"{reportActual.ResultStatistics.N},{overheadTime},{loopExecutionTime},{totalTime},{reportActual.ResultStatistics.StandardDeviation},{reportActual.GcStats.TotalOperations},{memAllocPerOp}");
         }
 
         private static void ExecuteFullBenchmark(IEnumerable<string> filters)
