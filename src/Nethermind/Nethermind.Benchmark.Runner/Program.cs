@@ -76,7 +76,7 @@ namespace Nethermind.Benchmark.Runner
                 Array.Empty<string>(),
                 Job.LongRun
                     .WithRuntime(CoreRuntime.Core70)
-                    .WithToolchain(BenchmarkDotNet.Toolchains.InProcess.NoEmit.InProcessNoEmitToolchain.Instance)
+                    .WithToolchain(BenchmarkDotNet.Toolchains.InProcess.NoEmit.InProcessNoEmitToolchain.DontLogOutput)
             );
 
             Environment.SetEnvironmentVariable("NETH.BENCHMARK.BYTECODE", "00" + byteCode);
