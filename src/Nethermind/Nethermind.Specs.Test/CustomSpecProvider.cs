@@ -1,100 +1,59 @@
-﻿//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
-using System;
 using System.Linq;
+using Nethermind.Core;
 using Nethermind.Core.Specs;
 using Nethermind.Int256;
+using Nethermind.Specs.ChainSpecStyle;
 using Nethermind.Specs.Forks;
 
-namespace Nethermind.Specs.Test
+namespace Nethermind.Specs.Test;
+
+public class CustomSpecProvider : SpecProviderBase, ISpecProvider
 {
-    public class CustomSpecProvider : ISpecProvider
+    private ForkActivation? _theMergeBlock = null;
+
+    public ulong NetworkId { get; }
+    public ulong ChainId { get; }
+
+    public CustomSpecProvider(params (ForkActivation Activation, IReleaseSpec Spec)[] transitions) : this(TestBlockchainIds.NetworkId, TestBlockchainIds.ChainId, transitions)
     {
-        private long? _theMergeBlock = null;
-        private readonly (long BlockNumber, IReleaseSpec Release)[] _transitions;
-
-        public ulong ChainId { get; }
-        public long[] TransitionBlocks { get; }
-
-        public CustomSpecProvider(params (long BlockNumber, IReleaseSpec Release)[] transitions) : this(0, transitions)
-        {
-        }
-
-        public CustomSpecProvider(ulong chainId, params (long BlockNumber, IReleaseSpec Release)[] transitions)
-        {
-            ChainId = chainId;
-            
-            if (transitions.Length == 0)
-            {
-                throw new ArgumentException($"There must be at least one release specified when instantiating {nameof(CustomSpecProvider)}", $"{nameof(transitions)}");
-            }
-
-            _transitions = transitions.OrderBy(r => r.BlockNumber).ToArray();
-            TransitionBlocks = _transitions.Select(t => t.BlockNumber).ToArray();
-
-            if (transitions[0].BlockNumber != 0L)
-            {
-                throw new ArgumentException($"First release specified when instantiating {nameof(CustomSpecProvider)} should be at genesis block (0)", $"{nameof(transitions)}");
-            }
-        }
-
-        public void UpdateMergeTransitionInfo(long? blockNumber, UInt256? terminalTotalDifficulty = null)
-        {
-            if (blockNumber != null)
-                _theMergeBlock = blockNumber;
-            if (terminalTotalDifficulty != null)
-                TerminalTotalDifficulty = terminalTotalDifficulty;
-        }
-
-        public long? MergeBlockNumber => _theMergeBlock;
-        public UInt256? TerminalTotalDifficulty { get; set; }
-
-#pragma warning disable CS8602
-#pragma warning disable CS8603
-        public IReleaseSpec GenesisSpec => _transitions?.Length == 0 ? null : _transitions[0].Release;
-#pragma warning restore CS8603
-#pragma warning restore CS8602
-
-        public IReleaseSpec GetSpec(long blockNumber)
-        {
-            IReleaseSpec spec = _transitions[0].Release;
-            for (int i = 1; i < _transitions.Length; i++)
-            {
-                if (blockNumber >= _transitions[i].BlockNumber)
-                {
-                    spec = _transitions[i].Release;
-                }
-                else
-                {
-                    break;    
-                }
-            }
-
-            return spec;
-        }
-
-        public long? DaoBlockNumber
-        {
-            get
-            {
-                (long blockNumber, IReleaseSpec daoRelease) = _transitions.SingleOrDefault(t => t.Release == Dao.Instance);
-                return daoRelease != null ? blockNumber : (long?)null;
-            }
-        }
-
     }
+
+    public CustomSpecProvider(ulong networkId, ulong chainId, params (ForkActivation Activation, IReleaseSpec Spec)[] transitions)
+    {
+        NetworkId = networkId;
+        ChainId = chainId;
+
+        (ForkActivation Activation, IReleaseSpec Spec)[] orderedTransitions = transitions.OrderBy(r => r.Activation).ToArray();
+
+        LoadTransitions(orderedTransitions);
+
+        TransitionActivations = orderedTransitions.Select(t => t.Activation).ToArray();
+    }
+
+    public void UpdateMergeTransitionInfo(long? blockNumber, UInt256? terminalTotalDifficulty = null)
+    {
+        if (blockNumber is not null)
+            _theMergeBlock = (ForkActivation)blockNumber;
+        if (terminalTotalDifficulty is not null)
+            TerminalTotalDifficulty = terminalTotalDifficulty;
+    }
+
+    public ForkActivation? MergeBlockNumber => _theMergeBlock;
+
+    public ulong TimestampFork { get; set; } = ISpecProvider.TimestampForkNever;
+    public UInt256? TerminalTotalDifficulty { get; set; }
+
+    public long? DaoBlockNumber
+    {
+        get
+        {
+            (ForkActivation forkActivation, IReleaseSpec? daoRelease) = _blockTransitions.SingleOrDefault(t => t.Spec == Dao.Instance);
+            return daoRelease is not null ? forkActivation.BlockNumber : null;
+        }
+    }
+
 }
+

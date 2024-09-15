@@ -1,18 +1,5 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2023 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System.Linq;
 using System.Numerics;
@@ -20,6 +7,7 @@ using Jint.Native;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Extensions;
+using Nethermind.Facade.Eth;
 using Nethermind.Int256;
 using Nethermind.JsonRpc.Data;
 
@@ -37,13 +25,13 @@ namespace Nethermind.Cli.Modules
             tx.Gas = Transaction.BaseTxGasCost;
             tx.GasPrice = (UInt256)Engine.JintEngine.GetValue("gasPrice").AsNumber();
             tx.To = address;
-            tx.Nonce = (ulong) NodeManager.Post<long>("eth_getTransactionCount", from, blockNumber).Result;
+            tx.Nonce = (ulong)NodeManager.Post<long>("eth_getTransactionCount", from, blockNumber).Result;
             tx.From = from;
 
-            Keccak? keccak = NodeManager.Post<Keccak>("eth_sendTransaction", tx).Result;
+            Hash256? keccak = NodeManager.Post<Hash256>("eth_sendTransaction", tx).Result;
             return keccak?.Bytes.ToHexString();
         }
-        
+
         [CliFunction("eth", "syncing")]
         public JsValue Syncing()
         {
@@ -51,16 +39,20 @@ namespace Nethermind.Cli.Modules
         }
 
         [CliFunction("eth", "getProof")]
-        public JsValue Call(string address, string[] storageKeys, string? blockParameter = null)
+        public JsValue GetProof(string address, string[] storageKeys, string? blockParameter = null)
         {
             return NodeManager.PostJint("eth_getProof", CliParseAddress(address), storageKeys.Select(CliParseHash), blockParameter ?? "latest").Result;
         }
-        
+
         [CliFunction("eth", "call")]
         public string? Call(object tx, string? blockParameter = null)
         {
             return NodeManager.Post<string>("eth_call", tx, blockParameter ?? "latest").Result;
         }
+
+        [CliFunction("eth", "simulateV1")]
+        public JsValue SimulateV1(ulong version, object[] blockCalls, string? blockParameter = null, bool traceTransfers = true) =>
+            NodeManager.PostJint("eth_simulateV1", 1, blockCalls, blockParameter ?? "latest", traceTransfers).Result;
 
         [CliFunction("eth", "getBlockByHash")]
         public JsValue GetBlockByHash(string hash, bool returnFullTransactionObjects)
@@ -89,7 +81,7 @@ namespace Nethermind.Cli.Modules
         [CliFunction("eth", "sendEth")]
         public string? SendEth(string from, string to, decimal amountInEth)
         {
-            return SendEth(CliParseAddress(from), CliParseAddress(to), (UInt256) (amountInEth * (decimal) 1.Ether()));
+            return SendEth(CliParseAddress(from), CliParseAddress(to), (UInt256)(amountInEth * (decimal)1.Ether()));
         }
 
         [CliFunction("eth", "estimateGas")]
@@ -97,7 +89,7 @@ namespace Nethermind.Cli.Modules
         {
             return NodeManager.Post<string>("eth_estimateGas", json, blockParameter ?? "latest").Result;
         }
-        
+
         [CliFunction("eth", "createAccessList")]
         public JsValue CreateAccessList(object tx, string? blockParameter = null, bool optimize = true)
         {
@@ -115,7 +107,7 @@ namespace Nethermind.Cli.Modules
         [CliFunction("eth", "sendWei")]
         public string? SendWei(string from, string to, BigInteger amountInWei)
         {
-            return SendEth(CliParseAddress(from), CliParseAddress(to), (UInt256) amountInWei);
+            return SendEth(CliParseAddress(from), CliParseAddress(to), (UInt256)amountInWei);
         }
 
         [CliFunction("eth", "sendRawTransaction")]
@@ -123,7 +115,7 @@ namespace Nethermind.Cli.Modules
         {
             return NodeManager.Post<string>("eth_sendRawTransaction", txRlp).Result;
         }
-        
+
         [CliFunction("eth", "sendTransaction")]
         public string? SendTransaction(object tx)
         {
@@ -159,13 +151,13 @@ namespace Nethermind.Cli.Modules
         {
             return NodeManager.Post<long>("eth_getUncleCountByBlockNumber", blockParameter).Result;
         }
-        
+
         [CliFunction("eth", "getUncleByBlockNumberAndIndex")]
         public JsValue GetUncleByBlockNumberAndIndex(string blockParameter, int index)
         {
             return NodeManager.PostJint("eth_getUncleByBlockNumberAndIndex", blockParameter, index).Result;
         }
-        
+
         [CliFunction("eth", "getUncleByBlockHashAndIndex")]
         public JsValue GetUncleByBlockHashAndIndex(string hash, int index)
         {
@@ -177,13 +169,13 @@ namespace Nethermind.Cli.Modules
         {
             return NodeManager.PostJint("eth_getTransactionByBlockNumberAndIndex", blockParameter, index).Result;
         }
-        
+
         [CliFunction("eth", "getTransactionByHash")]
         public JsValue GetTransactionByHash(string txHash)
         {
             return NodeManager.PostJint("eth_getTransactionByHash", CliParseHash(txHash)).Result;
         }
-        
+
         [CliProperty("eth", "pendingTransactions")]
         public JsValue PendingTransactions()
         {
@@ -219,19 +211,19 @@ namespace Nethermind.Cli.Modules
         {
             return NodeManager.PostJint("eth_getLogs", filter).Result;
         }
-        
+
         [CliFunction("eth", "getFilterChanges")]
         public JsValue GetFilterChanges(long filterId)
         {
             return NodeManager.PostJint("eth_getFilterChanges", filterId).Result;
         }
-        
+
         [CliFunction("eth", "newPendingTransactionFilter")]
         public long NewPendingTransactionFilter()
         {
             return NodeManager.Post<long>("eth_newPendingTransactionFilter").Result;
         }
-        
+
         [CliFunction("eth", "feeHistory")]
         public JsValue FeeHistory(long blockCount, string newestBlock, double[]? rewardPercentiles = null)
         {
@@ -243,13 +235,19 @@ namespace Nethermind.Cli.Modules
         {
             return NodeManager.PostJint("eth_gasPrice").Result;
         }
-        
+
         [CliFunction("eth", "maxPriorityFeePerGas")]
         public JsValue MaxPriorityFeePerGas()
         {
             return NodeManager.PostJint("eth_maxPriorityFeePerGas").Result;
         }
-        
+
+        [CliFunction("eth", "getAccount")]
+        public JsValue GetAccount(Address accountAddress, string? blockParam = null)
+        {
+            return NodeManager.PostJint("eth_getAccount", accountAddress, blockParam ?? "latest").Result;
+        }
+
         public EthCliModule(ICliEngine cliEngine, INodeManager nodeManager) : base(cliEngine, nodeManager)
         {
         }

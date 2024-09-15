@@ -1,33 +1,22 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
 using System.Collections.Generic;
+
 using Nethermind.Blockchain;
 using Nethermind.Blockchain.Receipts;
 using Nethermind.Consensus.Processing;
 using Nethermind.Consensus.Rewards;
 using Nethermind.Consensus.Tracing;
 using Nethermind.Consensus.Validators;
+using Nethermind.Core.Crypto;
 using Nethermind.Core.Specs;
 using Nethermind.Db;
-using Nethermind.JsonRpc.Data;
+using Nethermind.Evm.TransactionProcessing;
 using Nethermind.Logging;
+using Nethermind.State;
 using Nethermind.Trie.Pruning;
-using Newtonsoft.Json;
 
 namespace Nethermind.JsonRpc.Modules.Proof
 {
@@ -38,47 +27,51 @@ namespace Nethermind.JsonRpc.Modules.Proof
         private readonly ISpecProvider _specProvider;
         private readonly ILogManager _logManager;
         private readonly IReadOnlyBlockTree _blockTree;
-        private readonly ReadOnlyDbProvider _dbProvider;
-        private readonly IReadOnlyTrieStore _trieStore;
+        private readonly IWorldStateManager _worldStateManager;
 
         public ProofModuleFactory(
-            IDbProvider dbProvider,
+            IWorldStateManager worldStateManager,
             IBlockTree blockTree,
-            IReadOnlyTrieStore trieStore,
             IBlockPreprocessorStep recoveryStep,
             IReceiptFinder receiptFinder,
             ISpecProvider specProvider,
             ILogManager logManager)
         {
+            _worldStateManager = worldStateManager ?? throw new ArgumentNullException(nameof(worldStateManager));
             _logManager = logManager ?? throw new ArgumentNullException(nameof(logManager));
             _recoveryStep = recoveryStep ?? throw new ArgumentNullException(nameof(recoveryStep));
             _receiptFinder = receiptFinder ?? throw new ArgumentNullException(nameof(receiptFinder));
             _specProvider = specProvider ?? throw new ArgumentNullException(nameof(specProvider));
-            _dbProvider = dbProvider.AsReadOnly(false);
             _blockTree = blockTree.AsReadOnly();
-            _trieStore = trieStore;
         }
 
         public override IProofRpcModule Create()
         {
             ReadOnlyTxProcessingEnv txProcessingEnv = new(
-                _dbProvider, _trieStore, _blockTree, _specProvider, _logManager);
-            
+                _worldStateManager, _blockTree, _specProvider, _logManager);
+
+            IReadOnlyTxProcessingScope scope = txProcessingEnv.Build(Keccak.EmptyTreeHash);
+
+            RpcBlockTransactionsExecutor traceExecutor = new(scope.TransactionProcessor, scope.WorldState);
+
             ReadOnlyChainProcessingEnv chainProcessingEnv = new(
-                txProcessingEnv, Always.Valid, _recoveryStep, NoBlockRewards.Instance, new InMemoryReceiptStorage(), _dbProvider, _specProvider, _logManager);
+                scope,
+                Always.Valid,
+                _recoveryStep,
+                NoBlockRewards.Instance,
+                new InMemoryReceiptStorage(),
+                _specProvider,
+                _blockTree,
+                _worldStateManager.GlobalStateReader,
+                _logManager,
+                traceExecutor);
 
             Tracer tracer = new(
-                txProcessingEnv.StateProvider,
+                scope.WorldState,
+                chainProcessingEnv.ChainProcessor,
                 chainProcessingEnv.ChainProcessor);
 
             return new ProofRpcModule(tracer, _blockTree, _receiptFinder, _specProvider, _logManager);
         }
-
-        private static readonly List<JsonConverter> _converters = new()
-        {
-            new ProofConverter()
-        };
-
-        public override IReadOnlyCollection<JsonConverter> GetConverters() => _converters;
     }
 }

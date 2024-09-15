@@ -1,33 +1,32 @@
-﻿//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
+using System.Numerics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Text.Json.Serialization;
 using System.Threading;
+
 using Nethermind.Core.Extensions;
+using Nethermind.Serialization.Json;
 
 namespace Nethermind.Core.Crypto
 {
+    [JsonConverter(typeof(PublicKeyConverter))]
     public class PublicKey : IEquatable<PublicKey>
     {
+        // Ensure that hashes are different for every run of the node and every node, so if are any hash collisions on
+        // one node they will not be the same on another node or across a restart so hash collision cannot be used to degrade
+        // the performance of the network as a whole.
+        private static readonly uint s_instanceRandom = (uint)System.Security.Cryptography.RandomNumberGenerator.GetInt32(int.MinValue, int.MaxValue);
+
         public const int PrefixedLengthInBytes = 65;
         public const int LengthInBytes = 64;
         private Address? _address;
 
         private byte[]? _prefixedBytes;
+        private readonly int _hashCode;
 
         public PublicKey(string? hexString)
             : this(Core.Extensions.Bytes.FromHexString(hexString ?? throw new ArgumentNullException(nameof(hexString))))
@@ -49,6 +48,7 @@ namespace Nethermind.Core.Crypto
             }
 
             Bytes = bytes.Slice(bytes.Length - 64, 64).ToArray();
+            _hashCode = GetHashCode(Bytes);
         }
 
         public Address Address
@@ -93,13 +93,13 @@ namespace Nethermind.Core.Crypto
         private Address ComputeAddress()
         {
             Span<byte> hash = ValueKeccak.Compute(Bytes).BytesAsSpan;
-            return new Address(hash.Slice(12).ToArray());
+            return new Address(hash[12..].ToArray());
         }
 
         public static Address ComputeAddress(ReadOnlySpan<byte> publicKeyBytes)
         {
             Span<byte> hash = ValueKeccak.Compute(publicKeyBytes).BytesAsSpan;
-            return new Address(hash.Slice(12).ToArray());
+            return new Address(hash[12..].ToArray());
         }
 
         public override bool Equals(object? obj)
@@ -109,7 +109,21 @@ namespace Nethermind.Core.Crypto
 
         public override int GetHashCode()
         {
-            return MemoryMarshal.Read<int>(Bytes);
+            return _hashCode;
+        }
+
+        private static int GetHashCode(byte[] bytes)
+        {
+            uint hash = s_instanceRandom;
+            hash = BitOperations.Crc32C(hash, Unsafe.ReadUnaligned<ulong>(ref MemoryMarshal.GetArrayDataReference(bytes)));
+            hash = BitOperations.Crc32C(hash, Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(bytes), sizeof(long))));
+            hash = BitOperations.Crc32C(hash, Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(bytes), sizeof(long) * 2)));
+            hash = BitOperations.Crc32C(hash, Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(bytes), sizeof(long) * 3)));
+            hash = BitOperations.Crc32C(hash, Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(bytes), sizeof(long) * 4)));
+            hash = BitOperations.Crc32C(hash, Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(bytes), sizeof(long) * 5)));
+            hash = BitOperations.Crc32C(hash, Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(bytes), sizeof(long) * 6)));
+            hash = BitOperations.Crc32C(hash, Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(bytes), sizeof(long) * 7)));
+            return (int)hash;
         }
 
         public override string ToString()
@@ -125,17 +139,17 @@ namespace Nethermind.Core.Crypto
         public string ToShortString()
         {
             string value = Bytes.ToHexString(false);
-            return $"{value.Substring(0, 6)}...{value.Substring(value.Length - 6)}";
+            return $"{value[..6]}...{value[^6..]}";
         }
 
         public static bool operator ==(PublicKey? a, PublicKey? b)
         {
-            if (ReferenceEquals(a, null))
+            if (a is null)
             {
-                return ReferenceEquals(b, null);
+                return b is null;
             }
 
-            if (ReferenceEquals(b, null))
+            if (b is null)
             {
                 return false;
             }
@@ -147,5 +161,17 @@ namespace Nethermind.Core.Crypto
         {
             return !(a == b);
         }
+    }
+
+    public readonly struct PublicKeyAsKey(PublicKey key) : IEquatable<PublicKeyAsKey>
+    {
+        private readonly PublicKey _key = key;
+        public PublicKey Value => _key;
+
+        public static implicit operator PublicKey(PublicKeyAsKey key) => key._key;
+        public static implicit operator PublicKeyAsKey(PublicKey key) => new(key);
+
+        public bool Equals(PublicKeyAsKey other) => _key.Equals(other._key);
+        public override int GetHashCode() => _key.GetHashCode();
     }
 }

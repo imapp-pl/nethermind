@@ -1,24 +1,10 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Threading;
 using System.Threading.Tasks;
 using Nethermind.Core.Extensions;
 using Nethermind.Overseer.Test.Framework.Steps;
@@ -37,8 +23,8 @@ namespace Nethermind.Overseer.Test.Framework
             var passedCount = _results.Count(r => r.Passed);
             var failedCount = _results.Count - passedCount;
 
-            TestContext.WriteLine("=========================== NDM TESTS RESULTS ===========================");
-            TestContext.WriteLine($"NDM TESTS PASSED: {passedCount}, FAILED: {failedCount}");
+            TestContext.WriteLine("=========================== TESTS RESULTS ===========================");
+            TestContext.WriteLine($"TESTS PASSED: {passedCount}, FAILED: {failedCount}");
             foreach (var testResult in _results)
             {
                 string message = $"{testResult.Order}. {testResult.Name} has " +
@@ -47,6 +33,7 @@ namespace Nethermind.Overseer.Test.Framework
             }
         }
 
+#pragma warning disable NUnit1032
         /// <summary>
         /// Gets the task representing the fluent work.
         /// </summary>
@@ -54,6 +41,7 @@ namespace Nethermind.Overseer.Test.Framework
         /// The task.
         /// </value>
         public Task ScenarioCompletion { get; private set; }
+#pragma warning restore NUnit1032
 
         /// <summary>
         /// Queues up asynchronous work.
@@ -77,7 +65,7 @@ namespace Nethermind.Overseer.Test.Framework
                 return this;
             }, TaskContinuationOptions.OnlyOnRanToCompletion);
         }
-        
+
         /// <summary>
         /// Queues up asynchronous work.
         /// </summary>
@@ -123,9 +111,9 @@ namespace Nethermind.Overseer.Test.Framework
 
         private readonly ProcessBuilder _processBuilder;
 
-        private static string _runnerDir;
-        private static string _dbsDir;
-        private static string _configsDir;
+        private static readonly string _runnerDir;
+        private static readonly string _dbsDir;
+        private static readonly string _configsDir;
 
         static TestBuilder()
         {
@@ -154,8 +142,8 @@ namespace Nethermind.Overseer.Test.Framework
             }
 
             // The entry point for the async work.
-            // Spin up a completed task to start with 
-            // so that we dont have to do null checks    
+            // Spin up a completed task to start with
+            // so that we dont have to do null checks
             this.ScenarioCompletion = Task.FromResult<int>(0);
         }
 
@@ -196,16 +184,6 @@ namespace Nethermind.Overseer.Test.Framework
             return StartNode(name, "configs/cliqueMiner.cfg");
         }
 
-        public TestBuilder StartGoerliNode(string name)
-        {
-            return StartNode(name, "configs/goerliNode.cfg");
-        }
-
-        public TestBuilder StartGoerliMiner(string name)
-        {
-            return StartNode(name, "configs/goerliMiner.cfg");
-        }
-
         public TestBuilder StartAuRaMiner(string name, string key)
         {
             return StartNode(name, "configs/auRaMiner.cfg", key);
@@ -221,7 +199,7 @@ namespace Nethermind.Overseer.Test.Framework
 
         private NethermindProcessWrapper GetOrCreateNode(string name, string baseConfigFile, string key)
         {
-            if (!Nodes.ContainsKey(name))
+            if (!Nodes.TryGetValue(name, out NethermindProcessWrapper value))
             {
                 string bootnodes = string.Empty;
                 foreach ((_, NethermindProcessWrapper process) in Nodes)
@@ -239,16 +217,17 @@ namespace Nethermind.Overseer.Test.Framework
                 int p2pPort = _startPort + _nodeCounter;
                 int httpPort = _startHttpPort + _nodeCounter;
                 TestContext.WriteLine($"Creating {name} at {p2pPort}, http://localhost:{httpPort}");
-                Nodes[name] = _processBuilder.Create(name, _runnerDir, configPath, dbDir, httpPort, p2pPort, nodeKey, bootnodes);
+                value = _processBuilder.Create(name, _runnerDir, configPath, dbDir, httpPort, p2pPort, nodeKey, bootnodes);
+                Nodes[name] = value;
                 _nodeCounter++;
             }
 
-            return Nodes[name];
+            return value;
         }
 
         private string GetNodeKey(string key)
         {
-            if (key == null)
+            if (key is null)
             {
                 byte[] keyArray = new byte[32];
                 keyArray[0] = 1;
@@ -284,9 +263,15 @@ namespace Nethermind.Overseer.Test.Framework
             return this;
         }
 
+#if DEBUG
+        const string buildConfiguration = "Debug";
+#else
+        const string buildConfiguration = "Release";
+#endif
+
         private void CopyRunnerFiles(string targetDirectory)
         {
-            string sourceDirectory = Path.Combine(Directory.GetCurrentDirectory(), "../../../../Nethermind.Runner/bin/Debug/netcoreapp3.0/");
+            string sourceDirectory = Path.Combine(Directory.GetCurrentDirectory(), $"../../../../artifacts/bin/Nethermind.Runner/{buildConfiguration}/");
             if (!Directory.Exists(sourceDirectory))
             {
                 throw new IOException($"Runner not found at {sourceDirectory}");

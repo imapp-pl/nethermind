@@ -1,18 +1,5 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
 using System.Collections.Generic;
@@ -21,6 +8,7 @@ using Nethermind.Blockchain.Receipts;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Specs;
+using Nethermind.Serialization.Rlp;
 using Nethermind.State.Proofs;
 using Nethermind.Synchronization.Peers;
 
@@ -31,10 +19,12 @@ namespace Nethermind.Synchronization.Blocks
         private readonly Dictionary<int, int> _indexMapping;
         private readonly ISpecProvider _specProvider;
         private readonly PeerInfo _syncPeer;
-        private readonly bool _downloadReceipts;
+        private bool _downloadReceipts;
         private readonly IReceiptsRecovery _receiptsRecovery;
+        private static readonly IRlpStreamDecoder<TxReceipt> _receiptDecoder = Rlp.GetStreamDecoder<TxReceipt>();
 
-        public BlockDownloadContext(ISpecProvider specProvider, PeerInfo syncPeer, BlockHeader?[] headers, bool downloadReceipts, IReceiptsRecovery receiptsRecovery)
+        public BlockDownloadContext(ISpecProvider specProvider, PeerInfo syncPeer, IReadOnlyList<BlockHeader?> headers,
+            bool downloadReceipts, IReceiptsRecovery receiptsRecovery)
         {
             _indexMapping = new Dictionary<int, int>();
             _downloadReceipts = downloadReceipts;
@@ -42,8 +32,8 @@ namespace Nethermind.Synchronization.Blocks
             _specProvider = specProvider;
             _syncPeer = syncPeer;
 
-            Blocks = new Block[headers.Length - 1];
-            NonEmptyBlockHashes = new List<Keccak>();
+            Blocks = new Block[headers.Count - 1];
+            NonEmptyBlockHashes = new List<Hash256>();
 
             if (_downloadReceipts)
             {
@@ -51,10 +41,10 @@ namespace Nethermind.Synchronization.Blocks
             }
 
             int currentBodyIndex = 0;
-            for (int i = 1; i < headers.Length; i++)
+            for (int i = 1; i < headers.Count; i++)
             {
                 BlockHeader? header = headers[i];
-                if (header?.Hash == null)
+                if (header?.Hash is null)
                 {
                     break;
                 }
@@ -68,7 +58,7 @@ namespace Nethermind.Synchronization.Blocks
                 }
                 else
                 {
-                    Blocks[i - 1] = new Block(header, BlockBody.Empty);
+                    Blocks[i - 1] = new Block(header);
                 }
             }
         }
@@ -77,11 +67,11 @@ namespace Nethermind.Synchronization.Blocks
 
         public Block[] Blocks { get; }
 
-        public TxReceipt[]?[]? ReceiptsForBlocks { get; }
+        public TxReceipt[]?[]? ReceiptsForBlocks { get; private set; }
 
-        public List<Keccak> NonEmptyBlockHashes { get; }
+        public List<Hash256> NonEmptyBlockHashes { get; }
 
-        public IReadOnlyList<Keccak> GetHashesByOffset(int offset, int maxLength)
+        public IReadOnlyList<Hash256> GetHashesByOffset(int offset, int maxLength)
         {
             var hashesToRequest =
                 offset == 0
@@ -100,7 +90,7 @@ namespace Nethermind.Synchronization.Blocks
         {
             int mappedIndex = _indexMapping[index];
             Block block = Blocks[mappedIndex];
-            if (body == null)
+            if (body is null)
             {
                 throw new EthSyncException($"{_syncPeer} sent an empty body for {block.ToString(Block.Format.Short)}.");
             }
@@ -129,13 +119,28 @@ namespace Nethermind.Synchronization.Blocks
             return result;
         }
 
+        public Block GetBlockByRequestIdx(int index)
+        {
+            int mappedIndex = _indexMapping[index];
+            return Blocks[mappedIndex];
+        }
+
         private void ValidateReceipts(Block block, TxReceipt[] blockReceipts)
         {
-            Keccak receiptsRoot = new ReceiptTrie(_specProvider.GetSpec(block.Number), blockReceipts).RootHash;
+            Hash256 receiptsRoot = ReceiptTrie<TxReceipt>.CalculateRoot(_specProvider.GetSpec(block.Header), blockReceipts, _receiptDecoder);
 
             if (receiptsRoot != block.ReceiptsRoot)
             {
                 throw new EthSyncException($"Wrong receipts root for downloaded block {block.ToString(Block.Format.Short)}.");
+            }
+        }
+
+        public void SetDownloadReceipts()
+        {
+            if (!_downloadReceipts)
+            {
+                _downloadReceipts = true;
+                ReceiptsForBlocks = new TxReceipt[Blocks.Length][];
             }
         }
     }

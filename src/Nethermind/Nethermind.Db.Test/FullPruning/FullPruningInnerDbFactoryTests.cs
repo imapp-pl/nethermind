@@ -1,19 +1,5 @@
-﻿//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
-// 
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
 using System.IO;
@@ -33,24 +19,24 @@ namespace Nethermind.Db.Test.FullPruning
         {
             TestContext test = new();
             test.Directory.Exists.Returns(false);
-            test.TestedDbFactory.CreateDb(test.RocksDbSettings);
+            test.TestedDbFactory.CreateDb(test.DbSettings);
             test.RocksDbFactory.Received().CreateDb(Arg.Is(MatchSettings(test, 0)));
-            test.TestedDbFactory.CreateDb(test.RocksDbSettings);
+            test.TestedDbFactory.CreateDb(test.DbSettings);
             test.RocksDbFactory.Received().CreateDb(Arg.Is(MatchSettings(test, 1)));
         }
-        
+
         [Test]
         public void if_old_db_present_creates_no_index_db()
         {
             TestContext test = new();
             test.Directory.Exists.Returns(true);
-            test.Directory.EnumerateFiles().Returns(new[] {Substitute.For<IFileInfo>()});
-            test.TestedDbFactory.CreateDb(test.RocksDbSettings);
+            test.Directory.EnumerateFiles().Returns(new[] { Substitute.For<IFileInfo>() });
+            test.TestedDbFactory.CreateDb(test.DbSettings);
             test.RocksDbFactory.Received().CreateDb(Arg.Is(MatchSettings(test)));
-            test.TestedDbFactory.CreateDb(test.RocksDbSettings);
+            test.TestedDbFactory.CreateDb(test.DbSettings);
             test.RocksDbFactory.Received().CreateDb(Arg.Is(MatchSettings(test, 0)));
         }
-        
+
         [Test]
         public void if_new_db_present_creates_next_index_db()
         {
@@ -61,17 +47,17 @@ namespace Nethermind.Db.Test.FullPruning
             IDirectoryInfo dir11 = Substitute.For<IDirectoryInfo>();
             dir11.Name.Returns(11.ToString());
             IDirectoryInfo ignoredDir = Substitute.For<IDirectoryInfo>();
-            test.Directory.EnumerateDirectories().Returns(new[] {dir10, ignoredDir, dir11});
-            test.TestedDbFactory.CreateDb(test.RocksDbSettings);
+            test.Directory.EnumerateDirectories().Returns(new[] { dir10, ignoredDir, dir11 });
+            test.TestedDbFactory.CreateDb(test.DbSettings);
             test.RocksDbFactory.Received().CreateDb(Arg.Is(MatchSettings(test, 10)));
-            test.TestedDbFactory.CreateDb(test.RocksDbSettings);
+            test.TestedDbFactory.CreateDb(test.DbSettings);
             test.RocksDbFactory.Received().CreateDb(Arg.Is(MatchSettings(test, 11)));
         }
 
-        private static Expression<Predicate<RocksDbSettings>> MatchSettings(TestContext test, int? index = null)
+        private static Expression<Predicate<DbSettings>> MatchSettings(TestContext test, int? index = null)
         {
-            string dbName = test.RocksDbSettings.DbName + index;
-            string combine = Combine(test.RocksDbSettings.DbPath, index);
+            string dbName = test.DbSettings.DbName + index;
+            string combine = Combine(test.DbSettings.DbPath, index);
             return r => r.DbName == dbName && r.DbPath == combine;
         }
 
@@ -80,10 +66,10 @@ namespace Nethermind.Db.Test.FullPruning
         private class TestContext
         {
             private FullPruningInnerDbFactory _testedDbFactory;
-            
-            public RocksDbSettings RocksDbSettings = new("name", "path");
+
+            public DbSettings DbSettings = new("name", "path");
             public string Path => "path";
-            public IRocksDbFactory RocksDbFactory { get; } = Substitute.For<IRocksDbFactory>();
+            public IDbFactory RocksDbFactory { get; } = Substitute.For<IDbFactory>();
             public IFileSystem FileSystem { get; } = Substitute.For<IFileSystem>();
             public IDirectoryInfo Directory { get; } = Substitute.For<IDirectoryInfo>();
 
@@ -92,8 +78,8 @@ namespace Nethermind.Db.Test.FullPruning
             public TestContext()
             {
                 FileSystem.Path.Combine(Arg.Any<string>(), Arg.Any<string>()).Returns(c => Combine(c[0], c[1]));
-                FileSystem.DirectoryInfo.FromDirectoryName(Path).Returns(Directory);
-                RocksDbFactory.GetFullDbPath(Arg.Any<RocksDbSettings>()).Returns(c => c.Arg<RocksDbSettings>().DbPath);
+                FileSystem.DirectoryInfo.New(Path).Returns(Directory);
+                RocksDbFactory.GetFullDbPath(Arg.Any<DbSettings>()).Returns(c => c.Arg<DbSettings>().DbPath);
             }
         }
     }

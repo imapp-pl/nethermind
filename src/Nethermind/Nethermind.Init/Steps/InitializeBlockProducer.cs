@@ -1,78 +1,88 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
-using System.Runtime.CompilerServices;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Nethermind.Api;
 using Nethermind.Api.Extensions;
+using Nethermind.Config;
 using Nethermind.Consensus;
 using Nethermind.Consensus.Producers;
+using Nethermind.Consensus.Transactions;
 
 namespace Nethermind.Init.Steps
 {
     [RunnerStepDependencies(typeof(StartBlockProcessor), typeof(SetupKeyStore), typeof(InitializeNetwork), typeof(ReviewBlockTree))]
     public class InitializeBlockProducer : IStep
     {
-        protected IApiWithBlockchain _api;
+        private readonly IApiWithBlockchain _api;
 
         public InitializeBlockProducer(INethermindApi api)
         {
             _api = api;
         }
 
-        public async Task Execute(CancellationToken _)
+        public Task Execute(CancellationToken _)
         {
-            if (_api.BlockProductionPolicy.ShouldStartBlockProduction())
+            if (_api.BlockProductionPolicy!.ShouldStartBlockProduction())
             {
-                _api.BlockProducer = await BuildProducer();
+                _api.BlockProducer = BuildProducer();
+
+                _api.BlockProducerRunner = _api.GetConsensusPlugin()!.CreateBlockProducerRunner();
+
+                foreach (IConsensusWrapperPlugin wrapperPlugin in _api.GetConsensusWrapperPlugins().OrderBy((p) => p.Priority))
+                {
+                    _api.BlockProducerRunner = wrapperPlugin.InitBlockProducerRunner(_api.BlockProducerRunner);
+                }
             }
+
+            return Task.CompletedTask;
         }
 
-        protected virtual async Task<IBlockProducer> BuildProducer()
+        protected virtual IBlockProducer BuildProducer()
         {
-            _api.BlockProducerEnvFactory = new BlockProducerEnvFactory(_api.DbProvider,
-                _api.BlockTree,
-                _api.ReadOnlyTrieStore,
-                _api.SpecProvider,
-                _api.BlockValidator,
-                _api.RewardCalculatorSource,
-                _api.ReceiptStorage,
+            _api.BlockProducerEnvFactory = new BlockProducerEnvFactory(
+                _api.WorldStateManager!,
+                _api.BlockTree!,
+                _api.SpecProvider!,
+                _api.BlockValidator!,
+                _api.RewardCalculatorSource!,
+                _api.ReceiptStorage!,
                 _api.BlockPreprocessor,
-                _api.TxPool,
-                _api.TransactionComparerProvider,
-                _api.Config<IMiningConfig>(),
+                _api.TxPool!,
+                _api.TransactionComparerProvider!,
+                _api.Config<IBlocksConfig>(),
                 _api.LogManager);
-            
-            if (_api.ChainSpec == null) throw new StepDependencyException(nameof(_api.ChainSpec));
+
+            if (_api.ChainSpec is null) throw new StepDependencyException(nameof(_api.ChainSpec));
             IConsensusPlugin? consensusPlugin = _api.GetConsensusPlugin();
-            
+
             if (consensusPlugin is not null)
             {
-                foreach (IConsensusWrapperPlugin wrapperPlugin in _api.GetConsensusWrapperPlugins())
+                IBlockProducerFactory blockProducerFactory = consensusPlugin;
+
+                foreach (IConsensusWrapperPlugin wrapperPlugin in _api.GetConsensusWrapperPlugins().OrderBy((p) => p.Priority))
                 {
-                    return await wrapperPlugin.InitBlockProducer(consensusPlugin);
+                    blockProducerFactory = new ConsensusWrapperToBlockProducerFactoryAdapter(wrapperPlugin, blockProducerFactory);
                 }
 
-                return await consensusPlugin.InitBlockProducer();
+                return blockProducerFactory.InitBlockProducer();
             }
             else
             {
-                throw new NotSupportedException($"Mining in {_api.ChainSpec.SealEngineType} mode is not supported");    
+                throw new NotSupportedException($"Mining in {_api.ChainSpec.SealEngineType} mode is not supported");
+            }
+        }
+
+        private class ConsensusWrapperToBlockProducerFactoryAdapter(
+            IConsensusWrapperPlugin consensusWrapperPlugin,
+            IBlockProducerFactory baseBlockProducerFactory) : IBlockProducerFactory
+        {
+            public IBlockProducer InitBlockProducer(ITxSource? additionalTxSource = null)
+            {
+                return consensusWrapperPlugin.InitBlockProducer(baseBlockProducerFactory, additionalTxSource);
             }
         }
     }

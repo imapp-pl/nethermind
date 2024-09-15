@@ -1,18 +1,5 @@
-﻿//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
 using System.Collections.Generic;
@@ -22,12 +9,15 @@ namespace Nethermind.TxPool.Collections
 {
     /// <summary>
     /// Keeps a distinct pool of <see cref="TValue"/> with <see cref="TKey"/> in groups based on <see cref="TGroupKey"/>.
-    /// Uses separate comparator to distinct between elements. If there is duplicate element added it uses ordering comparator and keeps the one that is larger. 
+    /// Uses separate comparator to distinct between elements. If there is duplicate element added it uses ordering comparator and keeps the one that is larger.
     /// </summary>
     /// <typeparam name="TKey">Type of keys of items, unique in pool.</typeparam>
     /// <typeparam name="TValue">Type of items that are kept.</typeparam>
     /// <typeparam name="TGroupKey">Type of groups in which the items are organized</typeparam>
     public abstract class DistinctValueSortedPool<TKey, TValue, TGroupKey> : SortedPool<TKey, TValue, TGroupKey>
+        where TKey : notnull
+        where TValue : notnull
+        where TGroupKey : notnull
     {
         private readonly IComparer<TValue> _comparer;
         private readonly IDictionary<TValue, KeyValuePair<TKey, TValue>> _distinctDictionary;
@@ -44,8 +34,8 @@ namespace Nethermind.TxPool.Collections
             int capacity,
             IComparer<TValue> comparer,
             IEqualityComparer<TValue> distinctComparer,
-            ILogManager logManager) 
-            : base(capacity, comparer)
+            ILogManager logManager)
+            : base(capacity, comparer, logManager)
         {
             // ReSharper disable once VirtualMemberCallInConstructor
             _comparer = GetReplacementComparer(comparer ?? throw new ArgumentNullException(nameof(comparer)));
@@ -59,21 +49,30 @@ namespace Nethermind.TxPool.Collections
         {
             if (_distinctDictionary.TryGetValue(value, out KeyValuePair<TKey, TValue> oldKvp))
             {
-                TryRemove(oldKvp.Key);
+                TryRemoveNonLocked(oldKvp.Key, evicted: false, out _, out _);
             }
-            
+
             base.InsertCore(key, value, groupKey);
 
             _distinctDictionary[value] = new KeyValuePair<TKey, TValue>(key, value);
         }
 
-        protected override bool Remove(TKey key, TValue value)
+        protected override bool Remove(TKey key, out TValue? value)
         {
-            _distinctDictionary.Remove(value);
-            return base.Remove(key, value);
+            if (base.Remove(key, out value))
+            {
+                if (value is not null)
+                {
+                    _distinctDictionary.Remove(value);
+                }
+
+                return true;
+            }
+
+            return false;
         }
-        
-        protected virtual bool AllowSameKeyReplacement => false; 
+
+        protected virtual bool AllowSameKeyReplacement => false;
 
         protected override bool CanInsert(TKey key, TValue value)
         {
@@ -85,12 +84,12 @@ namespace Nethermind.TxPool.Collections
                 if (isDuplicate)
                 {
                     bool isHigher = _comparer.Compare(value, oldKvp.Value) <= 0;
-                    
+
                     if (_logger.IsTrace && !isHigher)
                     {
                         _logger.Trace($"Cannot insert {nameof(TValue)} {value}, its not distinct and not higher than old {nameof(TValue)} {oldKvp.Value}.");
                     }
-                    
+
                     return isHigher;
                 }
 

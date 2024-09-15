@@ -1,37 +1,46 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
+using System.Threading;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
 
 namespace Nethermind.Trie.Pruning
 {
-    public interface ITrieStore : ITrieNodeResolver, IDisposable
+    /// <summary>
+    /// Full traditional trie store.
+    /// </summary>
+    public interface ITrieStore : IDisposable
     {
-        void CommitNode(long blockNumber, NodeCommitInfo nodeCommitInfo);
-        
-        void FinishBlockCommit(TrieType trieType, long blockNumber, TrieNode? root);
+        void CommitNode(long blockNumber, Hash256? address, in NodeCommitInfo nodeCommitInfo, WriteFlags writeFlags = WriteFlags.None);
 
-        bool IsPersisted(Keccak keccak);
+        void FinishBlockCommit(TrieType trieType, long blockNumber, Hash256? address, TrieNode? root, WriteFlags writeFlags = WriteFlags.None);
 
-        void HackPersistOnShutdown();
-        
-        IReadOnlyTrieStore AsReadOnly(IKeyValueStore? keyValueStore);
-        
+        bool IsPersisted(Hash256? address, in TreePath path, in ValueHash256 keccak);
+
+        IReadOnlyTrieStore AsReadOnly(INodeStorage? keyValueStore = null);
+
         event EventHandler<ReorgBoundaryReached>? ReorgBoundaryReached;
+
+        // Used for serving via hash
+        IReadOnlyKeyValueStore TrieNodeRlpStore { get; }
+
+        // Used by healing
+        void Set(Hash256? address, in TreePath path, in ValueHash256 keccak, byte[] rlp);
+
+        bool HasRoot(Hash256 stateRoot);
+
+        IScopedTrieStore GetTrieStore(Hash256? address);
+
+        TrieNode FindCachedOrUnknown(Hash256? address, in TreePath path, Hash256 hash);
+        byte[]? LoadRlp(Hash256? address, in TreePath path, Hash256 hash, ReadFlags flags = ReadFlags.None);
+        byte[]? TryLoadRlp(Hash256? address, in TreePath path, Hash256 hash, ReadFlags flags = ReadFlags.None);
+        INodeStorage.KeyScheme Scheme { get; }
+    }
+
+    public interface IPruningTrieStore
+    {
+        public void PersistCache(CancellationToken cancellationToken);
     }
 }

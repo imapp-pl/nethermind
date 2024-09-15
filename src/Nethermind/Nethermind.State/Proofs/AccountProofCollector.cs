@@ -1,24 +1,13 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
+using Nethermind.Core.Extensions;
 using Nethermind.Int256;
 using Nethermind.Serialization.Rlp;
 using Nethermind.Trie;
@@ -31,17 +20,17 @@ namespace Nethermind.State.Proofs
     public class AccountProofCollector : ITreeVisitor
     {
         private int _pathTraversalIndex;
-        private Address _address = Address.Zero;
-        private AccountProof _accountProof;
+        private readonly Address _address = Address.Zero;
+        private readonly AccountProof _accountProof;
 
-        private Nibble[] _fullAccountPath;
-        private Nibble[][] _fullStoragePaths;
+        private readonly Nibble[] _fullAccountPath;
+        private readonly Nibble[][] _fullStoragePaths;
 
-        private List<byte[]> _accountProofItems = new();
-        private List<byte[]>[] _storageProofItems;
+        private readonly List<byte[]> _accountProofItems = new();
+        private readonly List<byte[]>[] _storageProofItems;
 
-        private Dictionary<Keccak, StorageNodeInfo> _storageNodeInfos = new();
-        private HashSet<Keccak> _nodeToVisitFilter = new();
+        private readonly Dictionary<Hash256, StorageNodeInfo> _storageNodeInfos = new();
+        private readonly HashSet<Hash256> _nodeToVisitFilter = new();
 
         private class StorageNodeInfo
         {
@@ -54,7 +43,7 @@ namespace Nethermind.State.Proofs
             public List<int> StorageIndices { get; }
         }
 
-        private static Keccak ToKey(byte[] index)
+        private static Hash256 ToKey(byte[] index)
         {
             return Keccak.Compute(index);
         }
@@ -69,9 +58,17 @@ namespace Nethermind.State.Proofs
         /// <summary>
         /// Only for testing
         /// </summary>
-        public AccountProofCollector(byte[] hashedAddress, Keccak[] keccakStorageKeys)
+        public AccountProofCollector(ReadOnlySpan<byte> hashedAddress, Hash256[] keccakStorageKeys)
+            : this(hashedAddress, keccakStorageKeys.Select((keccak) => (ValueHash256)keccak).ToArray())
         {
-            keccakStorageKeys ??= Array.Empty<Keccak>();
+        }
+
+        /// <summary>
+        /// Only for testing too
+        /// </summary>
+        public AccountProofCollector(ReadOnlySpan<byte> hashedAddress, ValueHash256[] keccakStorageKeys)
+        {
+            keccakStorageKeys ??= Array.Empty<ValueHash256>();
 
             _fullAccountPath = Nibbles.FromBytes(hashedAddress);
 
@@ -92,17 +89,17 @@ namespace Nethermind.State.Proofs
 
                 _accountProof.StorageProofs[i] = new StorageProof();
                 // we don't know the key (index)
-                //_accountProof.StorageProofs[i].Key = storageKeys[i];  
-                _accountProof.StorageProofs[i].Value = new byte[] { 0 };
+                //_accountProof.StorageProofs[i].Key = storageKeys[i];
+                _accountProof.StorageProofs[i].Value = Bytes.ZeroByte;
             }
         }
 
-        public AccountProofCollector(byte[] hashedAddress, params byte[][] storageKeys)
+        public AccountProofCollector(ReadOnlySpan<byte> hashedAddress, params byte[][] storageKeys)
         {
             storageKeys ??= Array.Empty<byte[]>();
             _fullAccountPath = Nibbles.FromBytes(hashedAddress);
 
-            Keccak[] localStorageKeys = storageKeys.Select(ToKey).ToArray();
+            Hash256[] localStorageKeys = storageKeys.Select(ToKey).ToArray();
 
             _accountProof = new AccountProof();
             _accountProof.StorageProofs = new StorageProof[localStorageKeys.Length];
@@ -121,7 +118,7 @@ namespace Nethermind.State.Proofs
 
                 _accountProof.StorageProofs[i] = new StorageProof();
                 _accountProof.StorageProofs[i].Key = storageKeys[i];
-                _accountProof.StorageProofs[i].Value = new byte[] { 0 };
+                _accountProof.StorageProofs[i].Value = Bytes.ZeroByte;
             }
         }
 
@@ -130,7 +127,7 @@ namespace Nethermind.State.Proofs
         {
             _accountProof.Address = _address = address ?? throw new ArgumentNullException(nameof(address));
         }
-        
+
         public AccountProofCollector(Address address, UInt256[] storageKeys)
             : this(address, storageKeys.Select(ToKey).ToArray())
         {
@@ -147,21 +144,23 @@ namespace Nethermind.State.Proofs
             return _accountProof;
         }
 
-        public bool ShouldVisit(Keccak nextNode)
+        public bool IsFullDbScan => false;
+
+        public bool ShouldVisit(Hash256 nextNode)
         {
-            if (_storageNodeInfos.ContainsKey(nextNode))
+            if (_storageNodeInfos.TryGetValue(nextNode, out StorageNodeInfo value))
             {
-                _pathTraversalIndex = _storageNodeInfos[nextNode].PathIndex;
+                _pathTraversalIndex = value.PathIndex;
             }
 
             return _nodeToVisitFilter.Contains(nextNode);
         }
 
-        public void VisitTree(Keccak rootHash, TrieVisitContext trieVisitContext)
+        public void VisitTree(Hash256 rootHash, TrieVisitContext trieVisitContext)
         {
         }
 
-        public void VisitMissingNode(Keccak nodeHash, TrieVisitContext trieVisitContext)
+        public void VisitMissingNode(Hash256 nodeHash, TrieVisitContext trieVisitContext)
         {
         }
 
@@ -176,32 +175,33 @@ namespace Nethermind.State.Proofs
                 foreach (int storageIndex in _storageNodeInfos[node.Keccak].StorageIndices)
                 {
                     Nibble childIndex = _fullStoragePaths[storageIndex][_pathTraversalIndex];
-                    Keccak childHash = node.GetChildHash((byte) childIndex);
+                    Hash256 childHash = node.GetChildHash((byte)childIndex);
                     if (childHash is null)
                     {
                         AddEmpty(node, trieVisitContext);
                     }
                     else
                     {
-                        if (!_storageNodeInfos.ContainsKey(childHash))
+                        ref StorageNodeInfo? value = ref CollectionsMarshal.GetValueRefOrAddDefault(_storageNodeInfos, childHash, out bool exists);
+                        if (!exists)
                         {
-                            _storageNodeInfos[childHash] = new StorageNodeInfo();
+                            value = new StorageNodeInfo();
                         }
 
-                        if (!bumpedIndexes.Contains((byte) childIndex))
+                        if (!bumpedIndexes.Contains((byte)childIndex))
                         {
-                            bumpedIndexes.Add((byte) childIndex);
-                            _storageNodeInfos[childHash].PathIndex = _pathTraversalIndex + 1;
+                            bumpedIndexes.Add((byte)childIndex);
+                            value.PathIndex = _pathTraversalIndex + 1;
                         }
-                        
-                        _storageNodeInfos[childHash].StorageIndices.Add(storageIndex);
+
+                        value.StorageIndices.Add(storageIndex);
                         _nodeToVisitFilter.Add(childHash);
                     }
                 }
             }
             else
             {
-                _nodeToVisitFilter.Add(node.GetChildHash((byte) _fullAccountPath[_pathTraversalIndex]));
+                _nodeToVisitFilter.Add(node.GetChildHash((byte)_fullAccountPath[_pathTraversalIndex]));
             }
 
             _pathTraversalIndex++;
@@ -212,11 +212,11 @@ namespace Nethermind.State.Proofs
             AddProofItem(node, trieVisitContext);
             _nodeToVisitFilter.Remove(node.Keccak);
 
-            Keccak childHash = node.GetChildHash(0);
+            Hash256 childHash = node.GetChildHash(0);
             if (trieVisitContext.IsStorage)
             {
                 _storageNodeInfos[childHash] = new StorageNodeInfo();
-                _storageNodeInfos[childHash].PathIndex = _pathTraversalIndex + node.Path.Length;
+                _storageNodeInfos[childHash].PathIndex = _pathTraversalIndex + node.Key.Length;
 
                 foreach (int storageIndex in _storageNodeInfos[node.Keccak].StorageIndices)
                 {
@@ -232,7 +232,7 @@ namespace Nethermind.State.Proofs
             if (IsPathMatched(node, _fullAccountPath))
             {
                 _nodeToVisitFilter.Add(childHash); // always accept so can optimize
-                _pathTraversalIndex += node.Path.Length;
+                _pathTraversalIndex += node.Key.Length;
             }
         }
 
@@ -240,17 +240,17 @@ namespace Nethermind.State.Proofs
         {
             if (trieVisitContext.IsStorage)
             {
-                if (_storageNodeInfos.ContainsKey(node.Keccak))
+                if (_storageNodeInfos.TryGetValue(node.Keccak, out StorageNodeInfo value))
                 {
-                    foreach (int storageIndex in _storageNodeInfos[node.Keccak].StorageIndices)
+                    foreach (int storageIndex in value.StorageIndices)
                     {
-                        _storageProofItems[storageIndex].Add(node.FullRlp);
+                        _storageProofItems[storageIndex].Add(node.FullRlp.ToArray());
                     }
                 }
             }
             else
             {
-                _accountProofItems.Add(node.FullRlp);
+                _accountProofItems.Add(node.FullRlp.ToArray());
             }
         }
 
@@ -258,9 +258,9 @@ namespace Nethermind.State.Proofs
         {
             if (trieVisitContext.IsStorage)
             {
-                if (_storageNodeInfos.ContainsKey(node.Keccak))
+                if (_storageNodeInfos.TryGetValue(node.Keccak, out StorageNodeInfo value))
                 {
-                    foreach (int storageIndex in _storageNodeInfos[node.Keccak].StorageIndices)
+                    foreach (int storageIndex in value.StorageIndices)
                     {
                         _storageProofItems[storageIndex].Add(Array.Empty<byte>());
                     }
@@ -272,7 +272,7 @@ namespace Nethermind.State.Proofs
             }
         }
 
-        public void VisitLeaf(TrieNode node, TrieVisitContext trieVisitContext, byte[] value)
+        public void VisitLeaf(TrieNode node, TrieVisitContext trieVisitContext, ReadOnlySpan<byte> value)
         {
             AddProofItem(node, trieVisitContext);
             _nodeToVisitFilter.Remove(node.Keccak);
@@ -285,13 +285,13 @@ namespace Nethermind.State.Proofs
                     bool isPathMatched = IsPathMatched(node, thisStoragePath);
                     if (isPathMatched)
                     {
-                        _accountProof.StorageProofs[storageIndex].Value = new RlpStream(node.Value).DecodeByteArray();
+                        _accountProof.StorageProofs[storageIndex].Value = new RlpStream(node.Value.ToArray()).DecodeByteArray();
                     }
                 }
             }
             else
             {
-                Account account = _accountDecoder.Decode(new RlpStream(node.Value));
+                Account account = _accountDecoder.Decode(new RlpStream(node.Value.ToArray()));
                 bool isPathMatched = IsPathMatched(node, _fullAccountPath);
                 if (isPathMatched)
                 {
@@ -319,9 +319,9 @@ namespace Nethermind.State.Proofs
         private bool IsPathMatched(TrieNode node, Nibble[] path)
         {
             bool isPathMatched = true;
-            for (int i = _pathTraversalIndex; i < node.Path.Length + _pathTraversalIndex; i++)
+            for (int i = _pathTraversalIndex; i < node.Key.Length + _pathTraversalIndex; i++)
             {
-                if ((byte) path[i] != node.Path[i - _pathTraversalIndex])
+                if ((byte)path[i] != node.Key[i - _pathTraversalIndex])
                 {
                     isPathMatched = false;
                     break;
@@ -331,9 +331,9 @@ namespace Nethermind.State.Proofs
             return isPathMatched;
         }
 
-        private AccountDecoder _accountDecoder = new();
+        private readonly AccountDecoder _accountDecoder = new();
 
-        public void VisitCode(Keccak codeHash, TrieVisitContext trieVisitContext)
+        public void VisitCode(Hash256 codeHash, TrieVisitContext trieVisitContext)
         {
             throw new InvalidOperationException($"{nameof(AccountProofCollector)} does never expect to visit code");
         }

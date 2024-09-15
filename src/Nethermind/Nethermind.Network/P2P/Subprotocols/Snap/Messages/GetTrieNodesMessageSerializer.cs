@@ -1,20 +1,7 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
-// 
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
+using System;
 using DotNetty.Buffers;
 using Nethermind.Serialization.Rlp;
 using Nethermind.State.Snap;
@@ -23,19 +10,21 @@ namespace Nethermind.Network.P2P.Subprotocols.Snap.Messages
 {
     public class GetTrieNodesMessageSerializer : IZeroMessageSerializer<GetTrieNodesMessage>
     {
+        private static readonly PathGroup _defaultPathGroup = new() { Group = Array.Empty<byte[]>() };
+
         public void Serialize(IByteBuffer byteBuffer, GetTrieNodesMessage message)
         {
-            (int contentLength, int allPathsLength, int[] pathsLengths)  = CalculateLengths(message);
+            (int contentLength, int allPathsLength, int[] pathsLengths) = CalculateLengths(message);
 
-            byteBuffer.EnsureWritable(Rlp.LengthOfSequence(contentLength), true);
-            NettyRlpStream stream = new (byteBuffer);
+            byteBuffer.EnsureWritable(Rlp.LengthOfSequence(contentLength));
+            NettyRlpStream stream = new(byteBuffer);
 
             stream.StartSequence(contentLength);
-            
+
             stream.Encode(message.RequestId);
             stream.Encode(message.RootHash);
 
-            if (message.Paths == null || message.Paths.Length == 0)
+            if (message.Paths is null || message.Paths.Count == 0)
             {
                 stream.EncodeNullObject();
             }
@@ -43,7 +32,7 @@ namespace Nethermind.Network.P2P.Subprotocols.Snap.Messages
             {
                 stream.StartSequence(allPathsLength);
 
-                for (int i = 0; i < message.Paths.Length; i++)
+                for (int i = 0; i < message.Paths.Count; i++)
                 {
                     PathGroup group = message.Paths[i];
 
@@ -55,49 +44,48 @@ namespace Nethermind.Network.P2P.Subprotocols.Snap.Messages
                     }
                 }
             }
-            
+
             stream.Encode(message.Bytes);
         }
 
         public GetTrieNodesMessage Deserialize(IByteBuffer byteBuffer)
         {
             GetTrieNodesMessage message = new();
-            NettyRlpStream stream = new (byteBuffer);
-            
+            NettyRlpStream stream = new(byteBuffer);
+
             stream.ReadSequenceLength();
 
             message.RequestId = stream.DecodeLong();
             message.RootHash = stream.DecodeKeccak();
-            message.Paths = stream.DecodeArray(DecodeGroup);
-            
+            PathGroup defaultValue = _defaultPathGroup;
+            message.Paths = stream.DecodeArrayPoolList(DecodeGroup, defaultElement: defaultValue);
+
             message.Bytes = stream.DecodeLong();
 
             return message;
         }
-        
-        private PathGroup DecodeGroup(RlpStream stream)
-        {
-            PathGroup group = new PathGroup();
-            group.Group = stream.DecodeArray(s => stream.DecodeByteArray());
 
-            return group;
-        }
-        
-        private (int contentLength, int allPathsLength, int[] pathsLengths) CalculateLengths(GetTrieNodesMessage message)
+        private PathGroup DecodeGroup(RlpStream stream) =>
+            new()
+            {
+                Group = stream.DecodeArray(s => stream.DecodeByteArray(), defaultElement: Array.Empty<byte>())
+            };
+
+        private static (int contentLength, int allPathsLength, int[] pathsLengths) CalculateLengths(GetTrieNodesMessage message)
         {
             int contentLength = Rlp.LengthOf(message.RequestId);
             contentLength += Rlp.LengthOf(message.RootHash);
-            
-            int allPathsLength = 0;
-            int[] pathsLengths = new int[message.Paths.Length];
 
-            if (message.Paths == null || message.Paths.Length == 0)
+            int allPathsLength = 0;
+            int[] pathsLengths = new int[message.Paths.Count];
+
+            if (message.Paths is null || message.Paths.Count == 0)
             {
                 allPathsLength = 1;
             }
             else
             {
-                for (var i = 0; i < message.Paths.Length; i++)
+                for (var i = 0; i < message.Paths.Count; i++)
                 {
                     PathGroup pathGroup = message.Paths[i];
                     int groupLength = 0;

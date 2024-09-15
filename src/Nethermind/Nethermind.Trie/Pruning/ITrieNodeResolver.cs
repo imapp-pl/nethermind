@@ -1,20 +1,8 @@
-//  Copyright (c) 2020 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using Nethermind.Core;
+using Nethermind.Core.Attributes;
 using Nethermind.Core.Crypto;
 
 namespace Nethermind.Trie.Pruning
@@ -28,13 +16,31 @@ namespace Nethermind.Trie.Pruning
         /// </summary>
         /// <param name="hash">Keccak hash of the RLP of the node.</param>
         /// <returns></returns>
-        TrieNode FindCachedOrUnknown(Keccak hash);
+        TrieNode FindCachedOrUnknown(in TreePath path, Hash256 hash);
 
         /// <summary>
         /// Loads RLP of the node.
         /// </summary>
         /// <param name="hash"></param>
         /// <returns></returns>
-        byte[]? LoadRlp(Keccak hash);
+        byte[]? LoadRlp(in TreePath path, Hash256 hash, ReadFlags flags = ReadFlags.None);
+
+        /// <summary>
+        /// Loads RLP of the node, but return null instead of throwing if does not exist.
+        /// </summary>
+        /// <param name="hash"></param>
+        /// <returns></returns>
+        byte[]? TryLoadRlp(in TreePath path, Hash256 hash, ReadFlags flags = ReadFlags.None);
+
+        /// <summary>
+        /// Got another node resolver for another trie. Used for tree traversal. For simplicity, if address is null,
+        /// return state trie.
+        /// </summary>
+        /// <param name="address"></param>
+        /// <returns></returns>
+        [Todo("Find a way to not have this. PatriciaTrie on its own does not need the concept of storage.")]
+        ITrieNodeResolver GetStorageTrieNodeResolver(Hash256? address);
+
+        INodeStorage.KeyScheme Scheme { get; }
     }
 }

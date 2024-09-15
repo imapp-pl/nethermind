@@ -1,30 +1,26 @@
-﻿//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
-// 
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Nethermind.Api;
 using Nethermind.Api.Extensions;
+using Nethermind.Config;
 using Nethermind.Consensus.AuRa.InitializationSteps;
 using Nethermind.Consensus.Producers;
 using Nethermind.Consensus.Transactions;
+using Nethermind.Logging;
+using Nethermind.Serialization.Json;
+using Nethermind.Specs.ChainSpecStyle;
+
+[assembly: InternalsVisibleTo("Nethermind.Merge.AuRa")]
 
 namespace Nethermind.Consensus.AuRa
 {
-    public class AuRaPlugin : IConsensusPlugin, ISynchronizationPlugin
+    /// <summary>
+    /// Consensus plugin for AuRa setup.
+    /// </summary>
+    public class AuRaPlugin : IConsensusPlugin, ISynchronizationPlugin, IInitializationPlugin
     {
         private AuRaNethermindApi? _nethermindApi;
         public string Name => SealEngineType;
@@ -35,6 +31,8 @@ namespace Nethermind.Consensus.AuRa
 
         public string SealEngineType => Core.SealEngineType.AuRa;
 
+        private StartBlockProducerAuRa? _blockProducerStarter;
+
 
         public ValueTask DisposeAsync()
         {
@@ -44,16 +42,10 @@ namespace Nethermind.Consensus.AuRa
         public Task Init(INethermindApi nethermindApi)
         {
             _nethermindApi = nethermindApi as AuRaNethermindApi;
-            return Task.CompletedTask;
-        }
-
-        public Task InitNetworkProtocol()
-        {
-            return Task.CompletedTask;
-        }
-
-        public Task InitRpcModules()
-        {
+            if (_nethermindApi is not null)
+            {
+                _blockProducerStarter = new(_nethermindApi);
+            }
             return Task.CompletedTask;
         }
 
@@ -67,20 +59,27 @@ namespace Nethermind.Consensus.AuRa
             return Task.CompletedTask;
         }
 
-        public Task<IBlockProducer> InitBlockProducer(IBlockProductionTrigger? blockProductionTrigger = null, ITxSource? additionalTxSource = null)
+        public IBlockProducer InitBlockProducer(ITxSource? additionalTxSource = null)
         {
             if (_nethermindApi is not null)
             {
-                StartBlockProducerAuRa blockProducerStarter = new(_nethermindApi);
-                DefaultBlockProductionTrigger ??= blockProducerStarter.CreateTrigger();
-                return blockProducerStarter.BuildProducer(blockProductionTrigger ?? DefaultBlockProductionTrigger, additionalTxSource);
+                return _blockProducerStarter!.BuildProducer(additionalTxSource);
             }
 
-            return Task.FromResult<IBlockProducer>(null);
+            return null;
         }
-        
-        public IBlockProductionTrigger? DefaultBlockProductionTrigger { get; private set; }
-        
-        public INethermindApi CreateApi() => new AuRaNethermindApi();
+
+        public IBlockProducerRunner CreateBlockProducerRunner()
+        {
+            return new StandardBlockProducerRunner(
+                _blockProducerStarter.CreateTrigger(),
+                _nethermindApi.BlockTree,
+                _nethermindApi.BlockProducer!);
+        }
+
+        public INethermindApi CreateApi(IConfigProvider configProvider, IJsonSerializer jsonSerializer,
+            ILogManager logManager, ChainSpec chainSpec) => new AuRaNethermindApi(configProvider, jsonSerializer, logManager, chainSpec);
+
+        public bool ShouldRunSteps(INethermindApi api) => true;
     }
 }

@@ -1,20 +1,8 @@
-﻿//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using DotNetty.Buffers;
+using Nethermind.Core.Collections;
 using Nethermind.Serialization.Rlp;
 
 namespace Nethermind.Network.P2P.Subprotocols.Eth.V63.Messages
@@ -24,11 +12,11 @@ namespace Nethermind.Network.P2P.Subprotocols.Eth.V63.Messages
         public void Serialize(IByteBuffer byteBuffer, NodeDataMessage message)
         {
             int length = GetLength(message, out int contentLength);
-            byteBuffer.EnsureWritable(length, true);
+            byteBuffer.EnsureWritable(length);
             RlpStream rlpStream = new NettyRlpStream(byteBuffer);
-            
+
             rlpStream.StartSequence(contentLength);
-            for (int i = 0; i < message.Data.Length; i++)
+            for (int i = 0; i < message.Data.Count; i++)
             {
                 rlpStream.Encode(message.Data[i]);
             }
@@ -37,18 +25,18 @@ namespace Nethermind.Network.P2P.Subprotocols.Eth.V63.Messages
         public NodeDataMessage Deserialize(IByteBuffer byteBuffer)
         {
             RlpStream rlpStream = new NettyRlpStream(byteBuffer);
-            byte[][] result = rlpStream.DecodeArray(stream => stream.DecodeByteArray());
+            ArrayPoolList<byte[]> result = rlpStream.DecodeArrayPoolList(stream => stream.DecodeByteArray());
             return new NodeDataMessage(result);
         }
 
         public int GetLength(NodeDataMessage message, out int contentLength)
         {
             contentLength = 0;
-            for (int i = 0; i < message.Data.Length; i++)
+            for (int i = 0; i < message.Data.Count; i++)
             {
                 contentLength += Rlp.LengthOf(message.Data[i]);
             }
-            
+
             return Rlp.LengthOfSequence(contentLength);
         }
     }

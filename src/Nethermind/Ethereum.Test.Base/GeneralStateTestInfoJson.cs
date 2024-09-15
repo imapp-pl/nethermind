@@ -1,27 +1,57 @@
-/*
- * Copyright (c) 2021 Demerzel Solutions Limited
- * This file is part of the Nethermind library.
- *
- * The Nethermind library is free software: you can redistribute it and/or modify
- * it under the terms of the GNU Lesser General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
- *
- * The Nethermind library is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU Lesser General Public License for more details.
- *
- * You should have received a copy of the GNU Lesser General Public License
- * along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
- */
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
+using System;
 using System.Collections.Generic;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace Ethereum.Test.Base
 {
+    [JsonConverter(typeof(GeneralStateTestInfoConverter))]
     public class GeneralStateTestInfoJson
     {
         public Dictionary<string, string>? Labels { get; set; }
+    }
+
+    public class GeneralStateTestInfoConverter : JsonConverter<GeneralStateTestInfoJson>
+    {
+        public override GeneralStateTestInfoJson? Read(
+            ref Utf8JsonReader reader,
+            Type typeToConvert,
+            JsonSerializerOptions options)
+        {
+            Dictionary<string, string>? labels = null;
+            if (reader.TokenType == JsonTokenType.StartObject)
+            {
+                var depth = reader.CurrentDepth;
+                while (reader.Read())
+                {
+                    if (reader.TokenType == JsonTokenType.EndObject && reader.CurrentDepth == depth)
+                    {
+                        break;
+                    }
+                    if (reader.TokenType == JsonTokenType.PropertyName && reader.ValueTextEquals("labels"u8))
+                    {
+                        reader.Read();
+                        labels = JsonSerializer.Deserialize<Dictionary<string, string>>(ref reader, options);
+                    }
+                    else
+                    {
+                        reader.Skip();
+                    }
+                }
+            }
+
+            return new GeneralStateTestInfoJson { Labels = labels };
+        }
+
+        public override void Write(
+            Utf8JsonWriter writer,
+            GeneralStateTestInfoJson info,
+            JsonSerializerOptions options)
+        {
+            JsonSerializer.Serialize(writer, info, options);
+        }
     }
 }

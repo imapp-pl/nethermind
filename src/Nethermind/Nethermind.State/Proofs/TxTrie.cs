@@ -1,74 +1,52 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
-using System.Collections.Generic;
 using Nethermind.Core;
-using Nethermind.Core.Extensions;
-using Nethermind.Core.Specs;
-using Nethermind.Db;
-using Nethermind.Logging;
+using Nethermind.Core.Buffers;
+using Nethermind.Core.Crypto;
 using Nethermind.Serialization.Rlp;
+using Nethermind.State.Trie;
 using Nethermind.Trie;
 
-namespace Nethermind.State.Proofs
+namespace Nethermind.State.Proofs;
+
+/// <summary>
+/// Represents a Patricia trie built of a collection of <see cref="Transaction"/>.
+/// </summary>
+public class TxTrie : PatriciaTrie<Transaction>
 {
-    public class TxTrie : PatriciaTree
+    private static readonly TxDecoder _txDecoder = TxDecoder.Instance;
+
+    /// <inheritdoc/>
+    /// <param name="transactions">The transactions to build the trie of.</param>
+    public TxTrie(Transaction[] transactions, bool canBuildProof = false, ICappedArrayPool? bufferPool = null)
+        : base(transactions, canBuildProof, bufferPool: bufferPool) => ArgumentNullException.ThrowIfNull(transactions);
+
+    protected override void Initialize(Transaction[] list)
     {
-        private readonly bool _allowMerkleProofConstructions;
-        private static readonly TxDecoder _txDecoder = new();
+        int key = 0;
 
-        /// <summary>
-        /// Helper class used for calculation of tx roots for block headers.
-        /// </summary>
-        /// <param name="txs">Transactions to build a trie from.</param>
-        /// <param name="allowMerkleProofConstructions">Some tries do not need to be used for proof constructions.
-        /// In such cases we can avoid maintaining any in-memory databases.</param>
-        public TxTrie(IReadOnlyList<Transaction>? txs, bool allowMerkleProofConstructions = false)
-            : base(allowMerkleProofConstructions ? (IDb) new MemDb() : NullDb.Instance, EmptyTreeHash, false, false, NullLogManager.Instance)
+        foreach (Transaction? transaction in list)
         {
-            _allowMerkleProofConstructions = allowMerkleProofConstructions;
-            if ((txs?.Count ?? 0) == 0)
-            {
-                return;
-            }
+            CappedArray<byte> buffer = _txDecoder.EncodeToCappedArray(transaction, RlpBehaviors.SkipTypedWrapping, _bufferPool);
+            CappedArray<byte> keyBuffer = (key++).EncodeToCappedArray(_bufferPool);
 
-            // 3% allocations (2GB) on a Goerli 3M blocks fast sync due to calling transaction encoder here
-            // Avoiding it would require pooling byte arrays and passing them as Spans to temporary trees
-            // a temporary trie would be a trie that exists to create a state root only and then be disposed of
-            for (int i = 0; i < txs.Count; i++)
-            {
-                Rlp transactionRlp = _txDecoder.Encode(txs[i], RlpBehaviors.SkipTypedWrapping);
-                Set(Rlp.Encode(i).Bytes, transactionRlp.Bytes);
-            }
-
-            // additional 3% 2GB is used here for trie nodes creation and root calculation
-            UpdateRootHash();
+            Set(keyBuffer.AsSpan(), buffer);
         }
+    }
 
-        public byte[][] BuildProof(int index)
-        {
-            if (!_allowMerkleProofConstructions)
-            {
-                throw new InvalidOperationException("Cannot build proofs without underlying DB (for now?)");
-            }
-            
-            ProofCollector proofCollector = new(Rlp.Encode(index).Bytes);
-            Accept(proofCollector, RootHash, new VisitingOptions {ExpectAccounts = false});
-            return proofCollector.BuildResult();
-        }
+    public static byte[][] CalculateProof(Transaction[] transactions, int index)
+    {
+        using TrackingCappedArrayPool cappedArray = new TrackingCappedArrayPool(transactions.Length * 4);
+        byte[][] rootHash = new TxTrie(transactions, canBuildProof: true, bufferPool: cappedArray).BuildProof(index);
+        return rootHash;
+    }
+
+    public static Hash256 CalculateRoot(Transaction[] transactions)
+    {
+        using TrackingCappedArrayPool cappedArray = new TrackingCappedArrayPool(transactions.Length * 4);
+        Hash256 rootHash = new TxTrie(transactions, canBuildProof: false, bufferPool: cappedArray).RootHash;
+        return rootHash;
     }
 }

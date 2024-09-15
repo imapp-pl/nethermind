@@ -1,18 +1,5 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using Nethermind.Blockchain;
 using Nethermind.Consensus;
@@ -20,16 +7,15 @@ using Nethermind.Consensus.Clique;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Extensions;
-using Nethermind.Specs;
 using Nethermind.Core.Test.Builders;
 using Nethermind.Crypto;
 using Nethermind.Db;
 using Nethermind.Int256;
 using Nethermind.Logging;
 using Nethermind.Serialization.Rlp;
-using Nethermind.Db.Blooms;
-using Nethermind.Wallet;
+using NSubstitute;
 using NUnit.Framework;
+using System.Threading.Tasks;
 using BlockTree = Nethermind.Blockchain.BlockTree;
 
 namespace Nethermind.Clique.Test
@@ -43,6 +29,7 @@ namespace Nethermind.Clique.Test
         private const string Block3Rlp = "f9025bf90256a09b095b36c15eaf13044373aef8ee0bd3a382a5abb92e402afa44b8249c3a90e9a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347940000000000000000000000000000000000000000a053580584816f617295ea26c0e17641e0120cab2f0a8ffb53a866fd53aa8e8c2da056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421b901000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002038347e7c4808458ee45f9b861d783010600846765746887676f312e372e33856c696e757800000000000000004e10f96536e45ceca7e34cc1bdda71db3f3bb029eb69afd28b57eb0202c0ec0859d383a99f63503c4df9ab6c1dc63bf6b9db77be952f47d86d2d7b208e77397301a00000000000000000000000000000000000000000000000000000000000000000880000000000000000c0c0";
         private const string Block4Rlp = "f9025bf90256a09eb9db9c3ec72918c7db73ae44e520139e95319c421ed6f9fc11fa8dd0cddc56a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347940000000000000000000000000000000000000000a053580584816f617295ea26c0e17641e0120cab2f0a8ffb53a866fd53aa8e8c2da056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421b901000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002048347e7c4808458ee4608b861d783010600846765746887676f312e372e33856c696e75780000000000000000713c53f21fd59a94de9c3f8342777f6660a3e99187114ebf52f0127caf6bcefa77195308fb80b4e6223673757732485c234d8f431a99c46799c57a4ecc4e4e5401a00000000000000000000000000000000000000000000000000000000000000000880000000000000000c0c0";
         private const string Block5Rlp = "f9025bf90256a08dabb64040467fa4e99a061878d90396978d173ecf47b2f72aa31e8d7ad917a9a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347940000000000000000000000000000000000000000a053580584816f617295ea26c0e17641e0120cab2f0a8ffb53a866fd53aa8e8c2da056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421b901000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000002058347e7c4808458ee4617b861d783010600846765746887676f312e372e33856c696e7578000000000000000052ad0baf5fefa05b3a51cdcc6484901465c66be48c3c9b7a4fcb5fcb867ea220390bcb6e4d740bc17d0c9e948cf0803cab107b538fb3a3efde89e26ede9ee26801a00000000000000000000000000000000000000000000000000000000000000000880000000000000000c0c0";
+
         private SnapshotManager _snapshotManager;
         private CliqueSealer _clique;
         private CliqueSealValidator _sealValidator;
@@ -59,7 +46,7 @@ namespace Nethermind.Clique.Test
             Block block3 = Rlp.Decode<Block>(new Rlp(Bytes.FromHexString(Block3Rlp)));
             Block block4 = Rlp.Decode<Block>(new Rlp(Bytes.FromHexString(Block4Rlp)));
             Block block5 = Rlp.Decode<Block>(new Rlp(Bytes.FromHexString(Block5Rlp)));
-            Block genesisBlock = GetRinkebyGenesis();
+            Block genesisBlock = GetGenesis();
             // Add blocks
             MineBlock(_blockTree, genesisBlock);
             MineBlock(_blockTree, block1);
@@ -72,13 +59,13 @@ namespace Nethermind.Clique.Test
             // Init snapshot db
             MemDb db = new();
             CliqueConfig config = new();
-            
-            _ecdsa = new EthereumEcdsa(ChainId.Rinkeby, LimboLogs.Instance); 
+
+            _ecdsa = new EthereumEcdsa(BlockchainIds.Goerli);
             _snapshotManager = new SnapshotManager(config, db, _blockTree, _ecdsa, LimboLogs.Instance);
-            _clique = new CliqueSealer(new Signer(ChainId.Rinkeby, key, LimboLogs.Instance), config, _snapshotManager, LimboLogs.Instance);
+            _clique = new CliqueSealer(new Signer(BlockchainIds.Goerli, key, LimboLogs.Instance), config, _snapshotManager, LimboLogs.Instance);
             _sealValidator = new CliqueSealValidator(config, _snapshotManager, LimboLogs.Instance);
         }
-        
+
         [TestCase(Block1Rlp)]
         [TestCase(Block2Rlp)]
         [TestCase(Block3Rlp)]
@@ -92,11 +79,11 @@ namespace Nethermind.Clique.Test
             Assert.True(validHeader);
             Assert.True(validSeal);
         }
-        
+
         [TestCase(Block4Rlp)]
         public void Test_no_signer_data_at_epoch_fails(string blockRlp)
         {
-            CliqueConfig config = new() {Epoch = 4};
+            CliqueConfig config = new() { Epoch = 4 };
             _clique = new CliqueSealer(NullSigner.Instance, config, _snapshotManager, LimboLogs.Instance);
             _sealValidator = new CliqueSealValidator(config, _snapshotManager, LimboLogs.Instance);
             Block block = Rlp.Decode<Block>(new Rlp(Bytes.FromHexString(blockRlp)));
@@ -106,23 +93,52 @@ namespace Nethermind.Clique.Test
             Assert.True(validSeal);
         }
 
-        public static Block GetRinkebyGenesis()
+        [TestCase(Block4Rlp)]
+        public async Task SealBlock_SignerCanSignHeader_FullHeaderIsUsedToSign(string blockRlp)
         {
-            Keccak parentHash = Keccak.Zero;
-            Keccak unclesHash = Keccak.OfAnEmptySequenceRlp;
+            IHeaderSigner signer = Substitute.For<IHeaderSigner>();
+            signer.CanSignHeader.Returns(true);
+            signer.CanSign.Returns(true);
+            signer.Address.Returns(new Address("0x7ffc57839b00206d1ad20c69a1981b489f772031"));
+            signer.Sign(Arg.Any<BlockHeader>()).Returns(new Signature(new byte[65]));
+            CliqueSealer sut = new CliqueSealer(signer, new CliqueConfig(), _snapshotManager, LimboLogs.Instance);
+            Block block = Rlp.Decode<Block>(new Rlp(Bytes.FromHexString(blockRlp)));
+
+            await sut.SealBlock(block, System.Threading.CancellationToken.None);
+
+            signer.Received().Sign(Arg.Any<BlockHeader>());
+        }
+
+        [TestCase(Block4Rlp)]
+        public async Task SealBlock_SignerCannotSignHeader_HashIsUsedToSign(string blockRlp)
+        {
+            ISigner signer = Substitute.For<ISigner>();
+            signer.CanSign.Returns(true);
+            signer.Address.Returns(new Address("0x7ffc57839b00206d1ad20c69a1981b489f772031"));
+            signer.Sign(Arg.Any<Hash256>()).Returns(new Signature(new byte[65]));
+            CliqueSealer sut = new CliqueSealer(signer, new CliqueConfig(), _snapshotManager, LimboLogs.Instance);
+            Block block = Rlp.Decode<Block>(new Rlp(Bytes.FromHexString(blockRlp)));
+
+            await sut.SealBlock(block, System.Threading.CancellationToken.None);
+
+            signer.Received().Sign(Arg.Any<Hash256>());
+        }
+
+        public static Block GetGenesis()
+        {
+            Hash256 parentHash = Keccak.Zero;
+            Hash256 unclesHash = Keccak.OfAnEmptySequenceRlp;
             Address beneficiary = Address.Zero;
             UInt256 difficulty = new(1);
             long number = 0L;
             int gasLimit = 4700000;
-            UInt256 timestamp = UInt256.Parse("1492009146");
+            ulong timestamp = 1492009146UL;
             byte[] extraData = Bytes.FromHexString("52657370656374206d7920617574686f7269746168207e452e436172746d616e42eb768f2244c8811c63729a21a3569731535f067ffc57839b00206d1ad20c69a1981b489f772031b279182d99e65703f0076e4812653aab85fca0f00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000");
             BlockHeader header = new(parentHash, unclesHash, beneficiary, difficulty, number, gasLimit, timestamp, extraData);
             header.Bloom = Bloom.Empty;
             Block genesis = new(header);
-            genesis.Header.Hash = new Keccak("0x6341fd3daf94b748c72ced5a5b26028f2474f5f00d824504e4fa37a75767e177");
-            // this would need to be loaded from rinkeby chainspec to include allocations
-            // Assert.AreEqual(new Keccak("0x6341fd3daf94b748c72ced5a5b26028f2474f5f00d824504e4fa37a75767e177"), genesis.Hash);
-            
+            genesis.Header.Hash = new Hash256("0x6341fd3daf94b748c72ced5a5b26028f2474f5f00d824504e4fa37a75767e177");
+
             return genesis;
         }
 

@@ -1,10 +1,12 @@
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
+
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using Ethereum.Test.Base;
 using Ethereum.Test.Base.Interfaces;
-using Nethermind.Logging;
 using Nethermind.Logging.NLog;
 
 namespace Nethermind.Blockchain.Test.Runner
@@ -30,7 +32,7 @@ namespace Nethermind.Blockchain.Test.Runner
                 Setup();
 
                 Console.Write($"{test,-120} ");
-                if (test.LoadFailure != null)
+                if (test.LoadFailure is not null)
                 {
                     WriteRed(test.LoadFailure);
                     testResults.Add(new EthereumTestResult(test.Name, test.LoadFailure));

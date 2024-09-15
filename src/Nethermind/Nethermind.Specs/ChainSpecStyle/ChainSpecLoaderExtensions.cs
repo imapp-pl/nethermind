@@ -1,54 +1,101 @@
-﻿//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2024 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
 using System.IO;
+using System.Reflection;
 using System.Text;
+using Nethermind.Config;
 using Nethermind.Logging;
 
-namespace Nethermind.Specs.ChainSpecStyle
+namespace Nethermind.Specs.ChainSpecStyle;
+
+public static class ChainSpecLoaderExtensions
 {
-    public static class ChainSpecLoaderExtensions
+
+    public static ChainSpec LoadEmbeddedOrFromFile(this IChainSpecLoader chainSpecLoader, string fileName, ILogger logger)
     {
-        public static ChainSpec LoadFromFile(this IChainSpecLoader chainSpecLoader, string filePath)
+        try
         {
-            filePath = filePath.GetApplicationResourcePath();
-            if (!File.Exists(filePath))
+            string resourceName = GetResourceName(fileName);
+            Assembly assembly = typeof(IConfig).Assembly;
+            using Stream stream = assembly.GetManifestResourceStream(resourceName);
+            if (stream is null)
             {
-                StringBuilder missingChainspecFileMessage = new($"Chainspec file does not exist {filePath}");
-                try
+                if (logger.IsInfo) logger.Info($"Did not find chainspec in embedded resources: {fileName}");
+                return chainSpecLoader.LoadFromFile(fileName, logger);
+            }
+            fileName = fileName.GetApplicationResourcePath();
+            if (File.Exists(fileName))
+            {
+                if (logger.IsInfo) logger.Info("ChainSpecPath matched an embedded resource inside the binary. Loading chainspec from embedded resources instead of file!");
+            }
+            else
+            {
+                if (logger.IsInfo) logger.Info($"Loading chainspec from embedded resources: {fileName}");
+            }
+            return chainSpecLoader.Load(stream);
+        }
+        catch (Exception ex)
+        {
+            if (logger.IsError) logger.Error("Error while loading Chainspec. Falling back to loading from file.", ex);
+            return chainSpecLoader.LoadFromFile(fileName, logger);
+        }
+    }
+
+    private static string GetResourceName(string fileName)
+    {
+        StringBuilder builder = new();
+        builder.Append("Nethermind.Config.");
+        if (!fileName.Contains('/'))
+        {
+            builder.Append("chainspec/");
+        }
+        builder.Append(fileName);
+        if (!fileName.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+        {
+            builder.Append(".json");
+        }
+        builder.Replace('/', '.');
+        return builder.ToString();
+    }
+
+    public static ChainSpec LoadFromFile(this IChainSpecLoader chainSpecLoader, string filePath, ILogger? logger = null)
+    {
+        filePath = CheckEmbeddedChainSpec(filePath);
+        if (logger?.IsInfo == true) logger.Value.Info($"Loading chainspec from file: {filePath}");
+        return LoadFromFileInternal(chainSpecLoader, filePath);
+    }
+
+    private static ChainSpec LoadFromFileInternal(IChainSpecLoader chainSpecLoader, string filePath)
+    {
+        using FileStream fileStream = new(filePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        return chainSpecLoader.Load(fileStream);
+    }
+
+    private static string CheckEmbeddedChainSpec(string filePath)
+    {
+        filePath = filePath.GetApplicationResourcePath();
+        if (!File.Exists(filePath))
+        {
+            StringBuilder missingChainspecFileMessage = new($"Chainspec file does not exist {filePath}");
+            try
+            {
+                missingChainspecFileMessage.AppendLine().AppendLine("Did you mean any of these:");
+                string[] configFiles = Directory.GetFiles(Path.GetDirectoryName(filePath), "*.json");
+                for (int i = 0; i < configFiles.Length; i++)
                 {
-                    missingChainspecFileMessage.AppendLine().AppendLine("Did you mean any of these:");
-                    string[] configFiles = Directory.GetFiles(Path.GetDirectoryName(filePath), "*.json");
-                    for (int i = 0; i < configFiles.Length; i++)
-                    {
-                        missingChainspecFileMessage.AppendLine($"  * {configFiles[i]}");
-                    }
-                }
-                catch (Exception)
-                {
-                    // do nothing - the lines above just give extra info and config is loaded at the beginning so unlikely we have any catastrophic errors here
-                }
-                finally
-                {
-                    throw new Exception(missingChainspecFileMessage.ToString());
+                    missingChainspecFileMessage.AppendLine($"  * {configFiles[i]}");
                 }
             }
-            
-            return chainSpecLoader.Load(File.ReadAllText(filePath));
+            catch (Exception)
+            {
+                // do nothing - the lines above just give extra info and config is loaded at the beginning so unlikely we have any catastrophic errors here
+            }
+
+            throw new FileNotFoundException(missingChainspecFileMessage.ToString());
         }
+
+        return filePath;
     }
 }

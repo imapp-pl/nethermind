@@ -1,142 +1,176 @@
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
+
 using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
-using System.Threading.Tasks;
+using Nethermind.Core.Extensions;
 using Nethermind.Db.Rocks.Config;
 using Nethermind.Logging;
 using RocksDbSharp;
 
-namespace Nethermind.Db.Rocks.Statistics
+namespace Nethermind.Db.Rocks.Statistics;
+
+public partial class DbMetricsUpdater<T>(string dbName, Options<T> dbOptions, RocksDb db, ColumnFamilyHandle? cf, IDbConfig dbConfig, ILogger logger)
+    : IDisposable
+    where T : Options<T>
 {
-    public class DbMetricsUpdater
+    private Timer? _timer;
+
+    public void StartUpdating()
     {
-        private readonly string _dbName;
-        private readonly DbOptions _dbOptions;
-        private readonly RocksDb _db;
-        private readonly IDbConfig _dbConfig;
-        private readonly ILogger _logger;
-        private Timer? _timer;
+        var offsetInSec = dbConfig.StatsDumpPeriodSec * 1.1;
 
-        public DbMetricsUpdater(string dbName, DbOptions dbOptions, RocksDb db, IDbConfig dbConfig, ILogger logger)
+        _timer = new Timer(UpdateMetrics, null, TimeSpan.FromSeconds(offsetInSec), TimeSpan.FromSeconds(offsetInSec));
+    }
+
+    private void UpdateMetrics(object? state)
+    {
+        try
         {
-            _dbName = dbName;
-            _dbOptions = dbOptions;
-            _db = db;
-            _dbConfig = dbConfig;
-            _logger = logger;
-        }
+            // It seems that currently there is no other option with .NET api to extract the compaction statistics than through the dumped string
+            var compactionStatsString = "";
+            compactionStatsString = cf is not null ? db.GetProperty("rocksdb.stats", cf) : db.GetProperty("rocksdb.stats");
+            ProcessCompactionStats(compactionStatsString);
 
-        public void StartUpdating()
-        {
-            var offsetInSec = _dbConfig.StatsDumpPeriodSec * 1.1;
-
-            _timer = new Timer(UpdateMetrics, null, TimeSpan.FromSeconds(offsetInSec), TimeSpan.FromSeconds(offsetInSec));
-        }
-
-        private void UpdateMetrics(object? state)
-        {
-            try
+            if (dbConfig.EnableDbStatistics)
             {
-                // It seems that currently there is no other option with .NET api to extract the compaction statistics than through the dumped string
-                var compactionStatsString = _db.GetProperty("rocksdb.stats");
-                ProcessCompactionStats(compactionStatsString);
-
-                if (_dbConfig.EnableDbStatistics)
-                {
-                    var dbStatsString = _dbOptions.GetStatisticsString();
-                    // Currently we don't extract any DB statistics but we can do it here
-                }
-            }
-            catch (Exception exc)
-            {
-                _logger.Error($"Error when updating metrics for {_dbName} database.", exc);
-                // Maybe we would like to stop the _timer here to avoid logging the same error all over again?
+                var dbStatsString = dbOptions.GetStatisticsString();
+                ProcessStatisticsString(dbStatsString);
+                // Currently we don't extract any DB statistics but we can do it here
             }
         }
-
-        public void ProcessCompactionStats(string compactionStatsString)
+        catch (Exception exc)
         {
-            if (!string.IsNullOrEmpty(compactionStatsString))
-            {
-                var stats = ExctractStatsPerLevel(compactionStatsString);
-                UpdateMetricsFromList(stats);
+            logger.Error($"Error when updating metrics for {dbName} database.", exc);
+            // Maybe we would like to stop the _timer here to avoid logging the same error all over again?
+        }
+    }
 
-                stats = ExctractIntervalCompaction(compactionStatsString);
-                UpdateMetricsFromList(stats);
+    public void ProcessStatisticsString(string dbStatsString)
+    {
+        foreach ((string Name, IDictionary<string, double> SubMetric) value in ExtractStatsFromStatisticString(dbStatsString))
+        {
+            // The metric can be of several type, usually just a counter, but sometime its a histogram,
+            // in which case we take both the sum and count.
+            if (value.SubMetric.TryGetValue("SUM", out var valueSum))
+            {
+                Metrics.DbStats[($"{dbName}Db", $"{value.Name}.sum")] = valueSum;
+                Metrics.DbStats[($"{dbName}Db", $"{value.Name}.count")] = value.SubMetric["COUNT"];
             }
             else
             {
-                _logger.Warn($"No RocksDB compaction stats available for {_dbName} databse.");
+                Metrics.DbStats[($"{dbName}Db", value.Name)] = value.SubMetric["COUNT"];
             }
         }
+    }
 
-        private void UpdateMetricsFromList(List<(string Name, long Value)> levelStats)
+    private static IEnumerable<(string Name, IDictionary<string, double> Value)> ExtractStatsFromStatisticString(string statsStr)
+    {
+        MatchCollection matches = ExtractStatsRegex2().Matches(statsStr);
+
+        foreach (Match match in matches)
         {
-            if(levelStats != null)
-            {
-                foreach (var stat in levelStats)
-                {
-                    Metrics.DbStats[$"{_dbName}Db{stat.Name}"] = stat.Value;
-                }
-            }
-        }
+            string statName = match.Groups["name"].Value;
 
-        /// <summary>
-        /// Example line:
-        ///   L0      2/0    1.77 MB   0.5      0.0     0.0      0.0       0.4      0.4       0.0   1.0      0.0     44.6      9.83              0.00       386    0.025       0      0
-        /// </summary>
-        private List<(string Name, long Value)> ExctractStatsPerLevel(string compactionStatsDump)
+            IDictionary<string, double> metricDictionary = new Dictionary<string, double>();
+            foreach (Match metricMatch in ExtractSubStatsRegex().Matches(match.Groups["value"].Value))
+            {
+                metricDictionary[metricMatch.Groups["subName"].Value] = double.Parse(metricMatch.Groups["subValue"].Value);
+            }
+
+            yield return (statName, metricDictionary);
+        }
+    }
+
+    public void ProcessCompactionStats(string compactionStatsString)
+    {
+        if (!string.IsNullOrEmpty(compactionStatsString))
         {
-            var stats = new List<(string Name, long Value)>(5);
-
-            if (!string.IsNullOrEmpty(compactionStatsDump))
-            {
-                var rgx = new Regex(@"^\s+L(\d+)\s+(\d+)\/(\d+).*$", RegexOptions.Multiline);
-                var matches = rgx.Matches(compactionStatsDump);
-
-                foreach (Match m in matches)
-                {
-                    var level = int.Parse(m.Groups[1].Value);
-                    stats.Add(($"Level{level}Files", int.Parse(m.Groups[2].Value)));
-                    stats.Add(($"Level{level}FilesCompacted", int.Parse(m.Groups[3].Value)));
-                }
-            }
-
-            return stats;
+            ExtractStatsPerLevel(compactionStatsString);
+            ExctractIntervalCompaction(compactionStatsString);
         }
-
-        /// <summary>
-        /// Example line:
-        /// Interval compaction: 0.00 GB write, 0.00 MB/s write, 0.00 GB read, 0.00 MB/s read, 0.0 seconds
-        /// </summary>
-        private List<(string Name, long Value)> ExctractIntervalCompaction(string compactionStatsDump)
+        else
         {
-            var stats = new List<(string Name, long Value)>(5);
+            logger.Warn($"No RocksDB compaction stats available for {dbName} database.");
+        }
+    }
 
-            if (!string.IsNullOrEmpty(compactionStatsDump))
+    // Level    Files   Size     Score Read(GB)  Rn(GB) Rnp1(GB) Write(GB) Wnew(GB) Moved(GB) W-Amp Rd(MB/s) Wr(MB/s) Comp(sec) CompMergeCPU(sec) Comp(cnt) Avg(sec) KeyIn KeyDrop Rblob(GB) Wblob(GB)
+    //----------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+    //L0      2/0    1.77 MB   0.5      0.0     0.0      0.0       0.4      0.4       0.0   1.0      0.0     44.6      9.83              0.00       386    0.025       0      0
+    [GeneratedRegex("^\\s+L(?<level>\\d+)\\s+(?<files>\\d+)\\/(?<files_compacting>\\d+)\\s+(?<size>\\S+)\\s+(?<size_scale>\\S+)\\s+(?<score>\\S+)\\s+(?<read>\\S+)\\s+(?<rn>\\S+)\\s+(?<rnp1>\\S+)\\s+(?<write>\\S+)\\s+(?<wnew>\\S+)\\s+(?<moved>\\S+)\\s+(?<wamp>\\S+)\\s+(?<rd>\\S+)\\s+(?<wr>\\S+)\\s+(?<comp_sec>\\S+)\\s+(?<comp_merge_cpu_sec>\\S+)\\s+(?<comp_total>\\S+)\\s+(?<comp_count>\\S+)\\s+(\\S+)\\s+(\\S+).*$",
+        RegexOptions.Multiline | RegexOptions.NonBacktracking | RegexOptions.ExplicitCapture)]
+    private static partial Regex ExtractStatsRegex();
+
+    private void ExtractStatsPerLevel(string compactionStatsDump)
+    {
+        if (!string.IsNullOrEmpty(compactionStatsDump))
+        {
+            Regex rgx = ExtractStatsRegex();
+            MatchCollection matches = rgx.Matches(compactionStatsDump);
+
+            foreach (Match m in matches)
             {
-                var rgx = new Regex(@"^Interval compaction: (\d+)\.\d+.*GB write.*\s+(\d+)\.\d+.*MB\/s write.*\s+(\d+)\.\d+.*GB read.*\s+(\d+)\.\d+.*MB\/s read.*\s+(\d+)\.\d+.*seconds.*$", RegexOptions.Multiline);
-                var match = rgx.Match(compactionStatsDump);
-
-                if(match != null && match.Success)
+                int level = int.Parse(m.Groups["level"].Value);
+                for (int i = 2; i <= 19; i++)
                 {
-                    stats.Add(("IntervalCompactionGBWrite", long.Parse(match.Groups[1].Value)));
-                    stats.Add(("IntervalCompactionMBPerSecWrite", long.Parse(match.Groups[2].Value)));
-                    stats.Add(("IntervalCompactionGBRead", long.Parse(match.Groups[3].Value)));
-                    stats.Add(("IntervalCompactionMBPerSecRead", long.Parse(match.Groups[4].Value)));
-                    stats.Add(("IntervalCompactionSeconds", long.Parse(match.Groups[5].Value)));
-                }
-                else
-                {
-                    _logger.Warn($"Cannot find 'Interval compaction' stats for {_dbName} database in the compation stats dump:{Environment.NewLine}{compactionStatsDump}");
+                    Group group = m.Groups[i];
+                    Metrics.DbCompactionStats[($"{dbName}Db", level, group.Name)] = double.Parse(group.Value) * i switch
+                    {
+                        4 => m.Groups[++i].Value switch
+                        {
+                            "KB" => 1.KiB(),
+                            "MB" => 1.MiB(),
+                            "GB" => 1.GiB(),
+                            _ => 1
+                        },
+                        _ => 1
+                    };
                 }
             }
-
-            return stats;
         }
+    }
+
+    /// <summary>
+    /// Example line:
+    /// Interval compaction: 0.00 GB write, 0.00 MB/s write, 0.00 GB read, 0.00 MB/s read, 0.0 seconds
+    /// </summary>
+    private void ExctractIntervalCompaction(string compactionStatsDump)
+    {
+        if (!string.IsNullOrEmpty(compactionStatsDump))
+        {
+            Regex rgx = ExtractIntervalRegex();
+            Match match = rgx.Match(compactionStatsDump);
+
+            if (match?.Success == true)
+            {
+                for (var index = 1; index < match.Groups.Count; index++)
+                {
+                    Group group = match.Groups[index];
+                    Metrics.DbStats[($"{dbName}Db", group.Name)] = long.Parse(group.Value);
+                }
+            }
+            else
+            {
+                logger.Warn($"Cannot find 'Interval compaction' stats for {dbName} database in the compation stats dump:{Environment.NewLine}{compactionStatsDump}");
+            }
+        }
+    }
+
+    [GeneratedRegex("^Interval compaction: (?<IntervalCompactionGBWrite>\\d+)\\.\\d+.*GB write.*\\s+(?<IntervalCompactionMBPerSecWrite>\\d+)\\.\\d+.*MB\\/s write.*\\s+(?<IntervalCompactionGBRead>\\d+)\\.\\d+.*GB read.*\\s+(?<IntervalCompactionMBPerSecRead>\\d+)\\.\\d+.*MB\\/s read.*\\s+(?<IntervalCompactionSeconds>\\d+)\\.\\d+.*seconds.*$",
+        RegexOptions.Multiline | RegexOptions.NonBacktracking | RegexOptions.ExplicitCapture)]
+    private static partial Regex ExtractIntervalRegex();
+
+    [GeneratedRegex("^(?<name>\\S+)(?<value>.*)$", RegexOptions.Multiline | RegexOptions.NonBacktracking | RegexOptions.ExplicitCapture)]
+    private static partial Regex ExtractStatsRegex2();
+
+    [GeneratedRegex("(?<subName>\\S+) \\: (?<subValue>\\S+)", RegexOptions.Singleline | RegexOptions.NonBacktracking | RegexOptions.ExplicitCapture)]
+    private static partial Regex ExtractSubStatsRegex();
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
     }
 }

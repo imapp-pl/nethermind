@@ -1,73 +1,55 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
 using System.Collections.Generic;
-using System.Linq;
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using Nethermind.Core.Extensions;
+using Nethermind.Core.Threading;
 
 namespace Nethermind.Core.Caching
 {
-    /// <remarks>
-    /// The array based solution is preferred to lower the overall memory management overhead. The <see cref="LinkedListNode{T}"/> based approach is very costly.
-    /// </remarks>
-    /// <summary>
-    /// https://stackoverflow.com/questions/754233/is-it-there-any-lru-implementation-of-idictionary
-    /// </summary>
-    public class LruCache<TKey, TValue> : ICache<TKey, TValue> where TKey : notnull
+    public sealed class LruCache<TKey, TValue> : ICache<TKey, TValue> where TKey : notnull
     {
         private readonly int _maxCapacity;
         private readonly Dictionary<TKey, LinkedListNode<LruCacheItem>> _cacheMap;
-        private readonly LinkedList<LruCacheItem> _lruList;
+        private readonly McsLock _lock = new();
+        private readonly string _name;
+        private LinkedListNode<LruCacheItem>? _leastRecentlyUsed;
 
         public LruCache(int maxCapacity, int startCapacity, string name)
         {
-            if (maxCapacity < 1) 
-            {
-                throw new ArgumentOutOfRangeException();
-            }
+            ArgumentOutOfRangeException.ThrowIfLessThan(maxCapacity, 1);
 
+            _name = name;
             _maxCapacity = maxCapacity;
             _cacheMap = typeof(TKey) == typeof(byte[])
                 ? new Dictionary<TKey, LinkedListNode<LruCacheItem>>((IEqualityComparer<TKey>)Bytes.EqualityComparer)
                 : new Dictionary<TKey, LinkedListNode<LruCacheItem>>(startCapacity); // do not initialize it at the full capacity
-            _lruList = new LinkedList<LruCacheItem>();
         }
 
         public LruCache(int maxCapacity, string name)
             : this(maxCapacity, 0, name)
         {
         }
-        
-        [MethodImpl(MethodImplOptions.Synchronized)]
+
         public void Clear()
         {
+            using var lockRelease = _lock.Acquire();
+
+            _leastRecentlyUsed = null;
             _cacheMap.Clear();
-            _lruList.Clear();
         }
 
-        [MethodImpl(MethodImplOptions.Synchronized)]
         public TValue Get(TKey key)
         {
+            using var lockRelease = _lock.Acquire();
+
             if (_cacheMap.TryGetValue(key, out LinkedListNode<LruCacheItem>? node))
             {
                 TValue value = node.Value.Value;
-                _lruList.Remove(node);
-                _lruList.AddLast(node);
+                LinkedListNode<LruCacheItem>.MoveToMostRecent(ref _leastRecentlyUsed, node);
                 return value;
             }
 
@@ -77,14 +59,14 @@ namespace Nethermind.Core.Caching
 #pragma warning restore 8603
         }
 
-        [MethodImpl(MethodImplOptions.Synchronized)]
         public bool TryGet(TKey key, out TValue value)
         {
+            using var lockRelease = _lock.Acquire();
+
             if (_cacheMap.TryGetValue(key, out LinkedListNode<LruCacheItem>? node))
             {
                 value = node.Value.Value;
-                _lruList.Remove(node);
-                _lruList.AddLast(node);
+                LinkedListNode<LruCacheItem>.MoveToMostRecent(ref _leastRecentlyUsed, node);
                 return true;
             }
 
@@ -95,75 +77,117 @@ namespace Nethermind.Core.Caching
             return false;
         }
 
-        [MethodImpl(MethodImplOptions.Synchronized)]
-        public void Set(TKey key, TValue val)
+        public bool Set(TKey key, TValue val)
         {
+            using var lockRelease = _lock.Acquire();
+
             if (val is null)
             {
-                Delete(key);
-                return;
+                return DeleteNoLock(key);
             }
 
             if (_cacheMap.TryGetValue(key, out LinkedListNode<LruCacheItem>? node))
             {
                 node.Value.Value = val;
-                _lruList.Remove(node);
-                _lruList.AddLast(node);
+                LinkedListNode<LruCacheItem>.MoveToMostRecent(ref _leastRecentlyUsed, node);
+                return false;
+            }
+
+            if (_cacheMap.Count >= _maxCapacity)
+            {
+                Replace(key, val);
             }
             else
             {
-                if (_cacheMap.Count >= _maxCapacity)
-                {
-                    Replace(key, val);
-                }
-                else
-                {
-                    LruCacheItem cacheItem = new LruCacheItem(key, val);
-                    LinkedListNode<LruCacheItem> newNode = new LinkedListNode<LruCacheItem>(cacheItem);
-                    _lruList.AddLast(newNode);
-                    _cacheMap.Add(key, newNode);
-                }
+                LinkedListNode<LruCacheItem> newNode = new(new(key, val));
+                LinkedListNode<LruCacheItem>.AddMostRecent(ref _leastRecentlyUsed, newNode);
+                _cacheMap.Add(key, newNode);
             }
+
+            return true;
         }
 
-        [MethodImpl(MethodImplOptions.Synchronized)]
-        public void Delete(TKey key)
+        public bool Delete(TKey key)
+        {
+            using var lockRelease = _lock.Acquire();
+
+            return DeleteNoLock(key);
+        }
+
+        private bool DeleteNoLock(TKey key)
         {
             if (_cacheMap.TryGetValue(key, out LinkedListNode<LruCacheItem>? node))
             {
-                _lruList.Remove(node);
+                LinkedListNode<LruCacheItem>.Remove(ref _leastRecentlyUsed, node);
                 _cacheMap.Remove(key);
+                return true;
             }
+
+            return false;
+        }
+
+        public bool Contains(TKey key)
+        {
+            using var lockRelease = _lock.Acquire();
+
+            return _cacheMap.ContainsKey(key);
+        }
+
+        public KeyValuePair<TKey, TValue>[] ToArray()
+        {
+            using var lockRelease = _lock.Acquire();
+
+            int i = 0;
+            var array = new KeyValuePair<TKey, TValue>[_cacheMap.Count];
+            foreach (KeyValuePair<TKey, LinkedListNode<LruCacheItem>> kvp in _cacheMap)
+            {
+                array[i++] = new KeyValuePair<TKey, TValue>(kvp.Key, kvp.Value.Value.Value);
+            }
+
+            return array;
         }
 
         [MethodImpl(MethodImplOptions.Synchronized)]
-        public bool Contains(TKey key) => _cacheMap.ContainsKey(key);
+        public TValue[] GetValues()
+        {
+            int i = 0;
+            var array = new TValue[_cacheMap.Count];
+            foreach (KeyValuePair<TKey, LinkedListNode<LruCacheItem>> kvp in _cacheMap)
+            {
+                array[i++] = kvp.Value.Value.Value;
+            }
 
-        [MethodImpl(MethodImplOptions.Synchronized)]
-        public IDictionary<TKey, TValue> Clone() => _lruList.ToDictionary(i => i.Key, i => i.Value);
+            return array;
+        }
+
+        public int Count => _cacheMap.Count;
 
         private void Replace(TKey key, TValue value)
         {
-            LinkedListNode<LruCacheItem>? node = _lruList.First;
-            _lruList.RemoveFirst();
-            _cacheMap.Remove(node!.Value.Key);
-
-            node.Value.Value = value;
-            node.Value.Key = key;
-            _lruList.AddLast(node);
-            _cacheMap.Add(key, node);
-        }
-
-        private class LruCacheItem
-        {
-            public LruCacheItem(TKey k, TValue v)
+            LinkedListNode<LruCacheItem>? node = _leastRecentlyUsed;
+            if (node is null)
             {
-                Key = k;
-                Value = v;
+                ThrowInvalidOperationException();
             }
 
-            public TKey Key;
-            public TValue Value;
+            _cacheMap.Remove(node!.Value.Key);
+
+            node.Value = new(key, value);
+            LinkedListNode<LruCacheItem>.MoveToMostRecent(ref _leastRecentlyUsed, node);
+            _cacheMap.Add(key, node);
+
+            [DoesNotReturn]
+            static void ThrowInvalidOperationException()
+            {
+                throw new InvalidOperationException(
+                    $"{nameof(LruCache<TKey, TValue>)} called {nameof(Replace)} when empty.");
+            }
+        }
+
+        private struct LruCacheItem(TKey k, TValue v)
+        {
+            public readonly TKey Key = k;
+            public TValue Value = v;
         }
 
         public long MemorySize => CalculateMemorySize(0, _cacheMap.Count);

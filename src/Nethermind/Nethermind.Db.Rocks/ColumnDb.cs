@@ -1,147 +1,154 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
 using System.Collections.Generic;
 using System.Linq;
 using Nethermind.Core;
+using Nethermind.Core.Crypto;
 using RocksDbSharp;
+using IWriteBatch = Nethermind.Core.IWriteBatch;
 
-namespace Nethermind.Db.Rocks
+namespace Nethermind.Db.Rocks;
+
+public class ColumnDb : IDb
 {
-    public class ColumnDb : IDbWithSpan
+    private readonly RocksDb _rocksDb;
+    internal readonly DbOnTheRocks _mainDb;
+    internal readonly ColumnFamilyHandle _columnFamily;
+
+    private readonly DbOnTheRocks.IteratorManager _iteratorManager;
+
+    public ColumnDb(RocksDb rocksDb, DbOnTheRocks mainDb, string name)
     {
-        private readonly RocksDb _rocksDb;
-        private readonly DbOnTheRocks _mainDb;
-        private readonly ColumnFamilyHandle _columnFamily;
+        _rocksDb = rocksDb;
+        _mainDb = mainDb;
+        if (name == "Default") name = "default";
+        _columnFamily = _rocksDb.GetColumnFamily(name);
+        Name = name;
 
-        public ColumnDb(RocksDb rocksDb, DbOnTheRocks mainDb, string name)
+        _iteratorManager = new DbOnTheRocks.IteratorManager(_rocksDb, _columnFamily, _mainDb._readAheadReadOptions);
+    }
+
+    public void Dispose()
+    {
+        _iteratorManager.Dispose();
+    }
+
+    public string Name { get; }
+
+    public byte[]? Get(ReadOnlySpan<byte> key, ReadFlags flags = ReadFlags.None)
+    {
+        return _mainDb.GetWithColumnFamily(key, _columnFamily, _iteratorManager, flags);
+    }
+
+    public Span<byte> GetSpan(ReadOnlySpan<byte> key, ReadFlags flags = ReadFlags.None)
+    {
+        return _mainDb.GetSpanWithColumnFamily(key, _columnFamily, flags);
+    }
+
+    public void Set(ReadOnlySpan<byte> key, byte[]? value, WriteFlags flags = WriteFlags.None)
+    {
+        _mainDb.SetWithColumnFamily(key, _columnFamily, value, flags);
+    }
+
+    public void PutSpan(ReadOnlySpan<byte> key, ReadOnlySpan<byte> value, WriteFlags writeFlags = WriteFlags.None)
+    {
+        _mainDb.SetWithColumnFamily(key, _columnFamily, value, writeFlags);
+    }
+
+    public KeyValuePair<byte[], byte[]?>[] this[byte[][] keys] =>
+        _rocksDb.MultiGet(keys, keys.Select(k => _columnFamily).ToArray());
+
+    public IEnumerable<KeyValuePair<byte[], byte[]?>> GetAll(bool ordered = false)
+    {
+        Iterator iterator = _mainDb.CreateIterator(ordered, _columnFamily);
+        return _mainDb.GetAllCore(iterator);
+    }
+
+    public IEnumerable<byte[]> GetAllKeys(bool ordered = false)
+    {
+        Iterator iterator = _mainDb.CreateIterator(ordered, _columnFamily);
+        return _mainDb.GetAllKeysCore(iterator);
+    }
+
+    public IEnumerable<byte[]> GetAllValues(bool ordered = false)
+    {
+        Iterator iterator = _mainDb.CreateIterator(ordered, _columnFamily);
+        return _mainDb.GetAllValuesCore(iterator);
+    }
+
+    public IWriteBatch StartWriteBatch()
+    {
+        return new ColumnsDbWriteBatch(this, (DbOnTheRocks.RocksDbWriteBatch)_mainDb.StartWriteBatch());
+    }
+
+    private class ColumnsDbWriteBatch : IWriteBatch
+    {
+        private readonly ColumnDb _columnDb;
+        private readonly DbOnTheRocks.RocksDbWriteBatch _underlyingWriteBatch;
+
+        public ColumnsDbWriteBatch(ColumnDb columnDb, DbOnTheRocks.RocksDbWriteBatch underlyingWriteBatch)
         {
-            _rocksDb = rocksDb;
-            _mainDb = mainDb;
-            _columnFamily = _rocksDb.GetColumnFamily(name);
-            Name = name;
+            _columnDb = columnDb;
+            _underlyingWriteBatch = underlyingWriteBatch;
         }
 
-        public void Dispose() { GC.SuppressFinalize(this); }
-
-        public string Name { get; }
-
-        public byte[]? this[byte[] key]
+        public void Dispose()
         {
-            get
+            _underlyingWriteBatch.Dispose();
+        }
+
+        public void Set(ReadOnlySpan<byte> key, byte[]? value, WriteFlags flags = WriteFlags.None)
+        {
+            if (value is null)
             {
-                UpdateReadMetrics();
-                return _rocksDb.Get(key, _columnFamily);
+                _underlyingWriteBatch.Delete(key, _columnDb._columnFamily);
             }
-            set
+            else
             {
-                UpdateWriteMetrics();
-                if (value is null)
-                {
-                    _rocksDb.Remove(key, _columnFamily, _mainDb.WriteOptions);
-                }
-                else
-                {
-                    _rocksDb.Put(key, value, _columnFamily, _mainDb.WriteOptions);
-                }
+                _underlyingWriteBatch.Set(key, value, _columnDb._columnFamily, flags);
             }
         }
 
-        public KeyValuePair<byte[], byte[]?>[] this[byte[][] keys] =>
-            _rocksDb.MultiGet(keys, keys.Select(k => _columnFamily).ToArray());
-
-        public IEnumerable<KeyValuePair<byte[], byte[]>> GetAll(bool ordered = false)
+        public void PutSpan(ReadOnlySpan<byte> key, ReadOnlySpan<byte> value, WriteFlags flags = WriteFlags.None)
         {
-            using Iterator iterator = _mainDb.CreateIterator(ordered, _columnFamily);
-            return _mainDb.GetAllCore(iterator);
+            _underlyingWriteBatch.Set(key, value, _columnDb._columnFamily, flags);
         }
+    }
 
-        public IEnumerable<byte[]> GetAllValues(bool ordered = false)
-        {
-            Iterator iterator = _mainDb.CreateIterator(ordered, _columnFamily);
-            return _mainDb.GetAllValuesCore(iterator);
-        }
+    public void Remove(ReadOnlySpan<byte> key)
+    {
+        // TODO: this does not participate in batching?
+        _rocksDb.Remove(key, _columnFamily, _mainDb.WriteOptions);
+    }
 
-        public IBatch StartBatch()
-        {
-            return new ColumnsDbBatch(this, (DbOnTheRocks.RocksDbBatch)_mainDb.StartBatch());
-        }
+    public bool KeyExists(ReadOnlySpan<byte> key)
+    {
+        return _mainDb.KeyExistsWithColumn(key, _columnFamily);
+    }
 
-        private class ColumnsDbBatch : IBatch
-        {
-            private readonly ColumnDb _columnDb;
-            private readonly DbOnTheRocks.RocksDbBatch _underlyingBatch;
+    public void Flush()
+    {
+        _mainDb.Flush();
+    }
 
-            public ColumnsDbBatch(ColumnDb columnDb, DbOnTheRocks.RocksDbBatch underlyingBatch)
-            {
-                _columnDb = columnDb;
-                _underlyingBatch = underlyingBatch;
-            }
+    public void Compact()
+    {
+        _rocksDb.CompactRange(Keccak.Zero.BytesToArray(), Keccak.MaxValue.BytesToArray(), _columnFamily);
+    }
 
-            public void Dispose()
-            {
-                _underlyingBatch.Dispose();
-            }
+    /// <summary>
+    /// Not sure how to handle delete of the columns DB
+    /// </summary>
+    /// <exception cref="NotSupportedException"></exception>
+    public void Clear() { throw new NotSupportedException(); }
 
-            public byte[]? this[byte[] key]
-            {
-                get => _underlyingBatch[key];
-                set
-                {
-                    if (value is null)
-                    {
-                        _underlyingBatch._rocksBatch.Delete(key, _columnDb._columnFamily);
-                    }
-                    else
-                    {
-                        _underlyingBatch._rocksBatch.Put(key, value, _columnDb._columnFamily);
-                    }
-                }
-            }
-        }
+    // Maybe it should be column specific metric?
+    public IDbMeta.DbMetric GatherMetric(bool includeSharedCache = false) => _mainDb.GatherMetric(includeSharedCache);
 
-        public void Remove(byte[] key)
-        {
-            // TODO: this does not participate in batching?
-            _rocksDb.Remove(key, _columnFamily, _mainDb.WriteOptions);
-        }
-
-        public bool KeyExists(byte[] key) => _rocksDb.Get(key, _columnFamily) != null;
-
-        public void Flush()
-        {
-            _mainDb.Flush();
-        }
-
-        /// <summary>
-        /// Not sure how to handle delete of the columns DB
-        /// </summary>
-        /// <exception cref="NotSupportedException"></exception>
-        public void Clear() { throw new NotSupportedException(); }
-
-        private void UpdateWriteMetrics() => _mainDb.UpdateWriteMetrics();
-
-        private void UpdateReadMetrics() => _mainDb.UpdateReadMetrics();
-
-        public Span<byte> GetSpan(byte[] key) => _rocksDb.GetSpan(key, _columnFamily);
-
-        public void DangerousReleaseMemory(in Span<byte> span)
-        {
-            _rocksDb.DangerousReleaseMemory(span);
-        }
+    public void DangerousReleaseMemory(in ReadOnlySpan<byte> span)
+    {
+        _mainDb.DangerousReleaseMemory(span);
     }
 }

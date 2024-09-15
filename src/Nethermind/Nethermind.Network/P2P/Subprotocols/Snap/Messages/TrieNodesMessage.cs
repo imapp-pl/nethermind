@@ -1,33 +1,21 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
-// 
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
+using Nethermind.Core.Collections;
 
 namespace Nethermind.Network.P2P.Subprotocols.Snap.Messages
 {
-    public class TrieNodesMessage : SnapMessageBase
+    public class TrieNodesMessage(IOwnedReadOnlyList<byte[]>? data) : SnapMessageBase
     {
-        public TrieNodesMessage(byte[][]? data)
-        {
-            Nodes = data ?? Array.Empty<byte[]>();
-        }
-        
         public override int PacketType => SnapMessageCode.TrieNodes;
 
-        public byte[][] Nodes { get; set; }
+        public IOwnedReadOnlyList<byte[]> Nodes { get; set; } = data ?? ArrayPoolList<byte[]>.Empty();
+
+        public override void Dispose()
+        {
+            base.Dispose();
+            Nodes.Dispose();
+        }
     }
 }

@@ -1,26 +1,19 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
-// 
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
+using System;
+using System.Collections;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq.Expressions;
+using System.Reflection;
 
 namespace Nethermind.Core.Collections
 {
     public static class CollectionExtensions
     {
+        public static int LockPartitions { get; } = Environment.ProcessorCount * 16;
+
         public static void AddRange<T>(this ICollection<T> list, IEnumerable<T> items)
         {
             foreach (T item in items)
@@ -28,7 +21,7 @@ namespace Nethermind.Core.Collections
                 list.Add(item);
             }
         }
-        
+
         public static void AddRange<T>(this ICollection<T> list, params T[] items)
         {
             for (int index = 0; index < items.Length; index++)
@@ -36,5 +29,62 @@ namespace Nethermind.Core.Collections
                 list.Add(items[index]);
             }
         }
+
+        public static bool NoResizeClear<TKey, TValue>(this ConcurrentDictionary<TKey, TValue>? dictionary)
+                where TKey : notnull
+        {
+            if (dictionary is null || dictionary.IsEmpty)
+            {
+                return false;
+            }
+
+            using var handle = dictionary.AcquireLock();
+
+            ClearCache<TKey, TValue>.Clear(dictionary);
+            return true;
+        }
+
+        private static class ClearCache<TKey, TValue> where TKey : notnull
+        {
+            public static readonly Action<ConcurrentDictionary<TKey, TValue>> Clear = CreateNoResizeClearExpression();
+
+            private static Action<ConcurrentDictionary<TKey, TValue>> CreateNoResizeClearExpression()
+            {
+                // Parameters
+                var dictionaryParam = Expression.Parameter(typeof(ConcurrentDictionary<TKey, TValue>), "dictionary");
+
+                // Access _tables field
+                var tablesField = typeof(ConcurrentDictionary<TKey, TValue>).GetField("_tables", BindingFlags.NonPublic | BindingFlags.Instance);
+                var tablesAccess = Expression.Field(dictionaryParam, tablesField!);
+
+                // Access _buckets and _countPerLock fields
+                var tablesType = tablesField!.FieldType;
+                var bucketsField = tablesType.GetField("_buckets", BindingFlags.NonPublic | BindingFlags.Instance);
+                var countPerLockField = tablesType.GetField("_countPerLock", BindingFlags.NonPublic | BindingFlags.Instance);
+
+                var bucketsAccess = Expression.Field(tablesAccess, bucketsField!);
+                var countPerLockAccess = Expression.Field(tablesAccess, countPerLockField!);
+
+                // Clear arrays using Array.Clear
+                var clearMethod = typeof(Array).GetMethod("Clear", new[] { typeof(Array), typeof(int), typeof(int) });
+
+                var clearBuckets = Expression.Call(clearMethod!,
+                    bucketsAccess,
+                    Expression.Constant(0),
+                    Expression.ArrayLength(bucketsAccess));
+
+                var clearCountPerLock = Expression.Call(clearMethod!,
+                    countPerLockAccess,
+                    Expression.Constant(0),
+                    Expression.ArrayLength(countPerLockAccess));
+
+                // Block to execute both clears
+                var block = Expression.Block(clearBuckets, clearCountPerLock);
+
+                // Compile the expression into a lambda
+                return Expression.Lambda<Action<ConcurrentDictionary<TKey, TValue>>>(block, dictionaryParam).Compile();
+            }
+        }
     }
 }
+

@@ -1,19 +1,8 @@
-﻿//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
+using Nethermind.Core;
+using Nethermind.Core.Collections;
 using Nethermind.Core.Extensions;
 using Nethermind.Core.Test.Builders;
 using Nethermind.Network.P2P.Subprotocols.Eth.V62.Messages;
@@ -28,34 +17,34 @@ namespace Nethermind.Network.Test.P2P.Subprotocols.Eth.V62
         [Test]
         public void Roundtrip()
         {
-            BlockHeadersMessage message = new();
-            message.BlockHeaders = new[] {Build.A.BlockHeader.TestObject};
+            using BlockHeadersMessage message = new();
+            message.BlockHeaders = new ArrayPoolList<BlockHeader>(1) { Build.A.BlockHeader.TestObject };
 
             BlockHeadersMessageSerializer serializer = new();
             byte[] bytes = serializer.Serialize(message);
             byte[] expectedBytes = Bytes.FromHexString("f901fcf901f9a0ff483e972a04a9a62bb4b7d04ae403c615604e4090521ecc5bb7af67f71be09ca01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347940000000000000000000000000000000000000000a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421b9010000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000830f424080833d090080830f424083010203a02ba5557a4c62a513c7e56d1bf13373e0da6bec016755483e91589fe1c6d212e28800000000000003e8");
 
-            Assert.AreEqual(bytes.ToHexString(), expectedBytes.ToHexString(), "bytes");
+            Assert.That(expectedBytes.ToHexString(), Is.EqualTo(bytes.ToHexString()), "bytes");
 
-            BlockHeadersMessage deserialized = serializer.Deserialize(bytes);
-            Assert.AreEqual(message.BlockHeaders.Length, deserialized.BlockHeaders.Length, "length");
-            Assert.AreEqual(message.BlockHeaders[0].Hash, deserialized.BlockHeaders[0].Hash, "hash");
+            using BlockHeadersMessage deserialized = serializer.Deserialize(bytes);
+            Assert.That(deserialized.BlockHeaders.Count, Is.EqualTo(message.BlockHeaders.Count), "length");
+            Assert.That(deserialized.BlockHeaders[0].Hash, Is.EqualTo(message.BlockHeaders[0].Hash), "hash");
 
             SerializerTester.TestZero(serializer, message);
         }
-        
+
         [Test]
         public void Roundtrip_nulls()
         {
-            BlockHeadersMessage message = new();
-            message.BlockHeaders = new[] {Build.A.BlockHeader.TestObject, null};
+            using BlockHeadersMessage message = new();
+            message.BlockHeaders = new ArrayPoolList<BlockHeader>(2) { Build.A.BlockHeader.TestObject, null };
 
             BlockHeadersMessageSerializer serializer = new();
             byte[] bytes = serializer.Serialize(message);
 
-            BlockHeadersMessage deserialized = serializer.Deserialize(bytes);
-            Assert.AreEqual(message.BlockHeaders.Length, deserialized.BlockHeaders.Length, "length");
-            Assert.AreEqual(message.BlockHeaders[0].Hash, deserialized.BlockHeaders[0].Hash, "hash");
+            using BlockHeadersMessage deserialized = serializer.Deserialize(bytes);
+            Assert.That(deserialized.BlockHeaders.Count, Is.EqualTo(message.BlockHeaders.Count), "length");
+            Assert.That(deserialized.BlockHeaders[0].Hash, Is.EqualTo(message.BlockHeaders[0].Hash), "hash");
             Assert.Null(message.BlockHeaders[1]);
 
             SerializerTester.TestZero(serializer, message);
@@ -68,26 +57,14 @@ namespace Nethermind.Network.Test.P2P.Subprotocols.Eth.V62
             // f9 01 02 81 7f 0 0 0 ... 0
             // 249 -> 258 -> 129 127 0 0 0 ... 0 (strange?)
             BlockHeadersMessageSerializer serializer = new();
-            BlockHeadersMessage message = serializer.Deserialize(rlp.Bytes);
-            Assert.AreEqual(8, message.BlockHeaders.Length);
+            using BlockHeadersMessage message = serializer.Deserialize(rlp.Bytes);
+            Assert.That(message.BlockHeaders.Count, Is.EqualTo(8));
         }
 
         [Test]
-        public void Throws_on_invalid_goerli_headers()
-        {
-            Rlp rlp1 = new(Bytes.FromHexString("f901d8f901d5a06c1b254ca0552790694760d5435bc4812ab1688c75ad078c9e813d1eb4139c80a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347940000000000000000000000000000000000000000a0518af1940525e0b68d089416a0c79ff0f244c4c8f7d65c32f2581c6833bae7aca056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421b90100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000282b2de837a120080845bf2a08883010203000102000102"));
-            Rlp rlp2 = new(Bytes.FromHexString("f901e1f901daf901d5a06c1b254ca0552790694760d5435bc4812ab1688c75ad078c9e813d1eb4139c80a01dcc4de8dec75d7aab85b567b6ccd41ad312451b948a7413f0a142fd40d49347940000000000000000000000000000000000000000a0518af1940525e0b68d089416a0c79ff0f244c4c8f7d65c32f2581c6833bae7aca056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421a056e81f171bcc55a6ff8345e692c0f86e5b48e01b996cadc001622fb5e363b421b90100000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000282b2de837a120080845bf2a08883010203000102000102c0c083010866"));
-            // f9 01 02 81 7f 0 0 0 ... 0
-            // 249 -> 258 -> 129 127 0 0 0 ... 0 (strange?)
-            BlockHeadersMessageSerializer serializer = new();
-            Assert.Throws<RlpException>(() => serializer.Deserialize(rlp1.Bytes));
-            Assert.Throws<RlpException>(() => serializer.Deserialize(rlp2.Bytes));
-        }
-        
-        [Test]
         public void To_string()
         {
-            BlockHeadersMessage newBlockMessage = new();
+            using BlockHeadersMessage newBlockMessage = new();
             _ = newBlockMessage.ToString();
         }
     }

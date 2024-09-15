@@ -1,31 +1,22 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
-// 
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
 using System.Threading.Tasks;
 using Nethermind.Api;
 using Nethermind.Api.Extensions;
 using Nethermind.Blockchain;
+using Nethermind.Blockchain.BeaconBlockRoot;
+using Nethermind.Blockchain.Blocks;
 using Nethermind.Blockchain.Receipts;
+using Nethermind.Config;
 using Nethermind.Consensus.Processing;
 using Nethermind.Consensus.Producers;
 using Nethermind.Consensus.Rewards;
 using Nethermind.Consensus.Transactions;
+using Nethermind.Core.Crypto;
 using Nethermind.Db;
+using Nethermind.Evm.TransactionProcessing;
 using Nethermind.Logging;
 using Nethermind.State;
 
@@ -49,21 +40,21 @@ namespace Nethermind.Consensus.Ethash
             return Task.CompletedTask;
         }
 
-        public Task<IBlockProducer> InitBlockProducer(IBlockProductionTrigger? blockProductionTrigger = null, ITxSource? additionalTxSource = null)
+        public IBlockProducer InitBlockProducer(ITxSource? additionalTxSource = null)
         {
             if (_nethermindApi!.SealEngineType != Nethermind.Core.SealEngineType.NethDev)
             {
-                return Task.FromResult((IBlockProducer)null);
+                return null;
             }
-            var (getFromApi, setInApi) = _nethermindApi!.ForProducer;
 
-            ReadOnlyDbProvider readOnlyDbProvider = getFromApi.DbProvider.AsReadOnly(false);
+            var (getFromApi, _) = _nethermindApi!.ForProducer;
+
             ReadOnlyBlockTree readOnlyBlockTree = getFromApi.BlockTree.AsReadOnly();
-            
+
             ITxFilterPipeline txFilterPipeline = new TxFilterPipelineBuilder(_nethermindApi.LogManager)
                 .WithBaseFeeFilter(getFromApi.SpecProvider)
                 .WithNullTxFilter()
-                .WithMinGasPriceFilter(_nethermindApi.Config<IMiningConfig>().MinGasPrice, getFromApi.SpecProvider)
+                .WithMinGasPriceFilter(_nethermindApi.Config<IBlocksConfig>(), getFromApi.SpecProvider)
                 .Build;
 
             TxPoolTxSource txPoolTxSource = new(
@@ -74,63 +65,58 @@ namespace Nethermind.Consensus.Ethash
                 txFilterPipeline);
 
             ILogger logger = getFromApi.LogManager.GetClassLogger();
-            if (logger.IsWarn) logger.Warn("Starting Neth Dev block producer & sealer");
-
+            if (logger.IsInfo) logger.Info("Starting Neth Dev block producer & sealer");
 
             ReadOnlyTxProcessingEnv producerEnv = new(
-                readOnlyDbProvider,
-                getFromApi.ReadOnlyTrieStore,
+                _nethermindApi.WorldStateManager!,
                 readOnlyBlockTree,
                 getFromApi.SpecProvider,
                 getFromApi.LogManager);
+
+            IReadOnlyTxProcessingScope scope = producerEnv.Build(Keccak.EmptyTreeHash);
 
             BlockProcessor producerProcessor = new(
                 getFromApi!.SpecProvider,
                 getFromApi!.BlockValidator,
                 NoBlockRewards.Instance,
-                new BlockProcessor.BlockProductionTransactionsExecutor(producerEnv, getFromApi!.SpecProvider, getFromApi.LogManager),
-                producerEnv.StateProvider,
-                producerEnv.StorageProvider,
+                new BlockProcessor.BlockProductionTransactionsExecutor(scope, getFromApi!.SpecProvider, getFromApi.LogManager),
+                scope.WorldState,
                 NullReceiptStorage.Instance,
-                NullWitnessCollector.Instance,
+                new BlockhashStore(getFromApi.SpecProvider, scope.WorldState),
+                new BeaconBlockRootHandler(scope.TransactionProcessor),
                 getFromApi.LogManager);
 
             IBlockchainProcessor producerChainProcessor = new BlockchainProcessor(
                 readOnlyBlockTree,
                 producerProcessor,
                 getFromApi.BlockPreprocessor,
+                getFromApi.StateReader,
                 getFromApi.LogManager,
                 BlockchainProcessor.Options.NoReceipts);
 
-            DefaultBlockProductionTrigger = new BuildBlocksRegularly(TimeSpan.FromMilliseconds(200))
-                .IfPoolIsNotEmpty(getFromApi.TxPool)
-                .Or(getFromApi.ManualBlockProductionTrigger);
-            
             IBlockProducer blockProducer = new DevBlockProducer(
                 additionalTxSource.Then(txPoolTxSource).ServeTxsOneByOne(),
                 producerChainProcessor,
-                producerEnv.StateProvider,
+                scope.WorldState,
                 getFromApi.BlockTree,
-                blockProductionTrigger ?? DefaultBlockProductionTrigger,
                 getFromApi.Timestamper,
                 getFromApi.SpecProvider,
-                getFromApi.Config<IMiningConfig>(),
+                getFromApi.Config<IBlocksConfig>(),
                 getFromApi.LogManager);
 
-            return Task.FromResult(blockProducer);
+            return blockProducer;
         }
 
         public string SealEngineType => Nethermind.Core.SealEngineType.NethDev;
-        public IBlockProductionTrigger DefaultBlockProductionTrigger { get; private set; }
-
-        public Task InitNetworkProtocol()
+        public IBlockProducerRunner CreateBlockProducerRunner()
         {
-            return Task.CompletedTask;
-        }
-
-        public Task InitRpcModules()
-        {
-            return Task.CompletedTask;
+            IBlockProductionTrigger trigger = new BuildBlocksRegularly(TimeSpan.FromMilliseconds(200))
+                .IfPoolIsNotEmpty(_nethermindApi.TxPool)
+                .Or(_nethermindApi.ManualBlockProductionTrigger);
+            return new StandardBlockProducerRunner(
+                trigger,
+                _nethermindApi.BlockTree,
+                _nethermindApi.BlockProducer!);
         }
     }
 }

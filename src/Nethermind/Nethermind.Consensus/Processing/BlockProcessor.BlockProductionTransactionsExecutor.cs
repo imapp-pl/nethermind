@@ -1,19 +1,5 @@
-﻿//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
-// 
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
 using System.Collections.Generic;
@@ -21,6 +7,7 @@ using System.Linq;
 using Nethermind.Core;
 using Nethermind.Core.Collections;
 using Nethermind.Core.Specs;
+using Nethermind.Evm;
 using Nethermind.Evm.Tracing;
 using Nethermind.Evm.TransactionProcessing;
 using Nethermind.Logging;
@@ -31,42 +18,39 @@ namespace Nethermind.Consensus.Processing
 {
     public partial class BlockProcessor
     {
-        public class BlockProductionTransactionsExecutor : IBlockProductionTransactionsExecutor
+        public class BlockProductionTransactionsExecutor(
+            ITransactionProcessor txProcessor,
+            IWorldState stateProvider,
+            IBlockProductionTransactionPicker txPicker,
+            ILogManager logManager)
+            : IBlockProductionTransactionsExecutor
         {
-            private readonly ITransactionProcessorAdapter _transactionProcessor;
-            private readonly IStateProvider _stateProvider;
-            private readonly IStorageProvider _storageProvider;
-            private readonly BlockProductionTransactionPicker _blockProductionTransactionPicker;
-            private readonly ILogger _logger;
+            private readonly ITransactionProcessorAdapter _transactionProcessor = new BuildUpTransactionProcessorAdapter(txProcessor);
+            private readonly ILogger _logger = logManager.GetClassLogger();
 
             public BlockProductionTransactionsExecutor(
-                ReadOnlyTxProcessingEnv readOnlyTxProcessingEnv,
+                IReadOnlyTxProcessingScope readOnlyTxProcessingEnv,
                 ISpecProvider specProvider,
-                ILogManager logManager) 
+                ILogManager logManager)
                 : this(
-                    readOnlyTxProcessingEnv.TransactionProcessor, 
-                    readOnlyTxProcessingEnv.StateProvider, 
-                    readOnlyTxProcessingEnv.StorageProvider, 
-                    specProvider, 
+                    readOnlyTxProcessingEnv.TransactionProcessor,
+                    readOnlyTxProcessingEnv.WorldState,
+                    specProvider,
                     logManager)
             {
             }
-            
+
             public BlockProductionTransactionsExecutor(
                 ITransactionProcessor transactionProcessor,
-                IStateProvider stateProvider,
-                IStorageProvider storageProvider, 
+                IWorldState stateProvider,
                 ISpecProvider specProvider,
-                ILogManager logManager)
+                ILogManager logManager) : this(transactionProcessor, stateProvider,
+                new BlockProductionTransactionPicker(specProvider), logManager)
             {
-                _transactionProcessor = new BuildUpTransactionProcessorAdapter(transactionProcessor);
-                _stateProvider = stateProvider;
-                _storageProvider = storageProvider;
-                _blockProductionTransactionPicker = new BlockProductionTransactionPicker(specProvider);
-                _logger = logManager.GetClassLogger();
             }
 
             protected EventHandler<TxProcessedEventArgs>? _transactionProcessed;
+
             event EventHandler<TxProcessedEventArgs>? IBlockProcessor.IBlockTransactionsExecutor.TransactionProcessed
             {
                 add => _transactionProcessed += value;
@@ -75,39 +59,41 @@ namespace Nethermind.Consensus.Processing
 
             event EventHandler<AddingTxEventArgs>? IBlockProductionTransactionsExecutor.AddingTransaction
             {
-                add => _blockProductionTransactionPicker.AddingTransaction += value;
-                remove => _blockProductionTransactionPicker.AddingTransaction -= value;
+                add => txPicker.AddingTransaction += value;
+                remove => txPicker.AddingTransaction -= value;
             }
 
-            public virtual TxReceipt[] ProcessTransactions(Block block, ProcessingOptions processingOptions, BlockReceiptsTracer receiptsTracer, IReleaseSpec spec)
+            public virtual TxReceipt[] ProcessTransactions(Block block, ProcessingOptions processingOptions,
+                BlockReceiptsTracer receiptsTracer, IReleaseSpec spec)
             {
                 IEnumerable<Transaction> transactions = GetTransactions(block);
 
                 int i = 0;
                 LinkedHashSet<Transaction> transactionsInBlock = new(ByHashTxComparer.Instance);
+                BlockExecutionContext blkCtx = new(block.Header);
                 foreach (Transaction currentTx in transactions)
                 {
-                    TxAction action = ProcessTransaction(block, currentTx, i++, receiptsTracer, processingOptions, transactionsInBlock);
+                    TxAction action = ProcessTransaction(block, in blkCtx, currentTx, i++, receiptsTracer, processingOptions, transactionsInBlock);
                     if (action == TxAction.Stop) break;
                 }
 
-                _stateProvider.Commit(spec, receiptsTracer);
-                _storageProvider.Commit(receiptsTracer);
+                stateProvider.Commit(spec, receiptsTracer);
 
                 SetTransactions(block, transactionsInBlock);
                 return receiptsTracer.TxReceipts.ToArray();
             }
 
             protected TxAction ProcessTransaction(
-                Block block, 
-                Transaction currentTx, 
-                int index, 
+                Block block,
+                in BlockExecutionContext blkCtx,
+                Transaction currentTx,
+                int index,
                 BlockReceiptsTracer receiptsTracer,
-                ProcessingOptions processingOptions, 
+                ProcessingOptions processingOptions,
                 LinkedHashSet<Transaction> transactionsInBlock,
                 bool addToBlock = true)
             {
-                AddingTxEventArgs args = _blockProductionTransactionPicker.CanAddTransaction(block, currentTx, transactionsInBlock, _stateProvider);
+                AddingTxEventArgs args = txPicker.CanAddTransaction(block, currentTx, transactionsInBlock, stateProvider);
 
                 if (args.Action != TxAction.Add)
                 {
@@ -115,20 +101,28 @@ namespace Nethermind.Consensus.Processing
                 }
                 else
                 {
-                    _transactionProcessor.ProcessTransaction(block, currentTx, receiptsTracer, processingOptions, _stateProvider);
-                    
-                    if (addToBlock)
+                    TransactionResult result = _transactionProcessor.ProcessTransaction(in blkCtx, currentTx, receiptsTracer, processingOptions, stateProvider);
+
+                    if (result)
                     {
-                        transactionsInBlock.Add(currentTx);
-                        _transactionProcessed?.Invoke(this, new TxProcessedEventArgs(index, currentTx, receiptsTracer.TxReceipts[index]));
+                        if (addToBlock)
+                        {
+                            transactionsInBlock.Add(currentTx);
+                            _transactionProcessed?.Invoke(this,
+                                new TxProcessedEventArgs(index, currentTx, receiptsTracer.TxReceipts[index]));
+                        }
+                    }
+                    else
+                    {
+                        args.Set(TxAction.Skip, result.Error!);
                     }
                 }
-                
+
                 return args.Action;
             }
-            
+
             protected static IEnumerable<Transaction> GetTransactions(Block block) => block.GetTransactions();
-            
+
             protected static void SetTransactions(Block block, IEnumerable<Transaction> transactionsInBlock)
             {
                 block.TrySetTransactions(transactionsInBlock.ToArray());

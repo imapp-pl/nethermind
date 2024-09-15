@@ -1,18 +1,5 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
 using System.Collections.Generic;
@@ -23,17 +10,14 @@ namespace Nethermind.Db
     public abstract class RocksDbInitializer
     {
         private readonly IDbProvider _dbProvider;
-        protected IRocksDbFactory RocksDbFactory { get; }
-        protected IMemDbFactory MemDbFactory { get; }
-        protected bool PersistedDb => _dbProvider.DbMode == DbModeHint.Persisted;
-        
+        protected IDbFactory DbFactory { get; }
+
         private readonly List<Action> _registrations = new();
 
-        protected RocksDbInitializer(IDbProvider? dbProvider, IRocksDbFactory? rocksDbFactory, IMemDbFactory? memDbFactory)
+        protected RocksDbInitializer(IDbProvider? dbProvider, IDbFactory? dbFactory)
         {
             _dbProvider = dbProvider ?? throw new ArgumentNullException(nameof(dbProvider));
-            RocksDbFactory = rocksDbFactory ?? NullRocksDbFactory.Instance;
-            MemDbFactory = memDbFactory ?? NullMemDbFactory.Instance;
+            DbFactory = dbFactory ?? NullDbFactory.Instance;
         }
 
         protected void RegisterCustomDb(string dbName, Func<IDb> dbFunc)
@@ -47,20 +31,32 @@ namespace Nethermind.Db
             _registrations.Add(Action);
         }
 
-        protected void RegisterDb(RocksDbSettings settings) => 
+        protected void RegisterCustomColumnDb<T>(string dbName, Func<IColumnsDb<T>> dbFunc)
+        {
+            void Action()
+            {
+                IColumnsDb<T> db = dbFunc();
+                _dbProvider.RegisterColumnDb(dbName, db);
+            }
+
+            _registrations.Add(Action);
+        }
+
+        protected void RegisterDb(DbSettings settings) =>
             AddRegisterAction(settings.DbName, () => CreateDb(settings));
-        
-        protected void RegisterColumnsDb<T>(RocksDbSettings settings) =>
+
+        protected void RegisterColumnsDb<T>(DbSettings settings) where T : struct, Enum =>
             AddRegisterAction(settings.DbName, () => CreateColumnDb<T>(settings));
-        
+
         private void AddRegisterAction(string dbName, Func<IDb> dbCreation) =>
             _registrations.Add(() => _dbProvider.RegisterDb(dbName, dbCreation()));
+        private void AddRegisterAction<T>(string dbName, Func<IColumnsDb<T>> dbCreation) =>
+            _registrations.Add(() => _dbProvider.RegisterColumnDb(dbName, dbCreation()));
 
-        private IDb CreateDb(RocksDbSettings settings) => 
-            PersistedDb ? RocksDbFactory.CreateDb(settings) : MemDbFactory.CreateDb(settings.DbName);
+        private IDb CreateDb(DbSettings settings) => DbFactory.CreateDb(settings);
 
-        private IDb CreateColumnDb<T>(RocksDbSettings settings) => 
-            PersistedDb ? RocksDbFactory.CreateColumnsDb<T>(settings) : MemDbFactory.CreateColumnsDb<T>(settings.DbName);
+        private IColumnsDb<T> CreateColumnDb<T>(DbSettings settings) where T : struct, Enum =>
+            DbFactory.CreateColumnsDb<T>(settings);
 
         protected void InitAll()
         {
@@ -81,9 +77,6 @@ namespace Nethermind.Db
             await Task.WhenAll(allInitializers);
         }
 
-        protected static string GetTitleDbName(string dbName)
-        {
-            return char.ToUpper(dbName[0]) + dbName.Substring(1);
-        }
+        protected static string GetTitleDbName(string dbName) => char.ToUpper(dbName[0]) + dbName[1..];
     }
 }

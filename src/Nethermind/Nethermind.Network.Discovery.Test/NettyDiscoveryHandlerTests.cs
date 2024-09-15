@@ -1,24 +1,12 @@
-﻿//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading.Tasks;
+using DotNetty.Buffers;
 using DotNetty.Handlers.Logging;
 using DotNetty.Transport.Bootstrapping;
 using DotNetty.Transport.Channels;
@@ -30,6 +18,7 @@ using Nethermind.Crypto;
 using Nethermind.Logging;
 using Nethermind.Network.Discovery.Messages;
 using Nethermind.Network.Test.Builders;
+using Nethermind.Serialization.Rlp;
 using Nethermind.Stats.Model;
 using NSubstitute;
 using NUnit.Framework;
@@ -68,13 +57,13 @@ namespace Nethermind.Network.Discovery.Test
             _discoveryManagersMocks.Add(discoveryManagerMock);
             _discoveryManagersMocks.Add(discoveryManagerMock2);
 
-            Assert.AreEqual(2, _channelActivatedCounter);
+            Assert.That(() => _channelActivatedCounter, Is.EqualTo(2).After(1000, 100));
         }
 
         [TearDown]
         public async Task CleanUp()
         {
-            _channels.ToList().ForEach(x => { x.CloseAsync(); });
+            _channels.ForEach(x => { x.CloseAsync(); });
             await Task.Delay(50);
         }
 
@@ -83,13 +72,13 @@ namespace Nethermind.Network.Discovery.Test
         public async Task PingSentReceivedTest()
         {
             ResetMetrics();
-            
+
             PingMsg msg = new(_privateKey2.PublicKey, Timestamper.Default.UnixTime.SecondsLong + 1200, _address, _address2, new byte[32])
             {
                 FarAddress = _address2
             };
-            
-            _discoveryHandlers[0].SendMsg(msg);
+
+            await _discoveryHandlers[0].SendMsg(msg);
             await SleepWhileWaiting();
             _discoveryManagersMocks[1].Received(1).OnIncomingMsg(Arg.Is<DiscoveryMsg>(x => x.MsgType == MsgType.Ping));
 
@@ -97,11 +86,11 @@ namespace Nethermind.Network.Discovery.Test
             {
                 FarAddress = _address
             };
-            
-            _discoveryHandlers[1].SendMsg(msg2);
+
+            await _discoveryHandlers[1].SendMsg(msg2);
             await SleepWhileWaiting();
             _discoveryManagersMocks[0].Received(1).OnIncomingMsg(Arg.Is<DiscoveryMsg>(x => x.MsgType == MsgType.Ping));
-            
+
             AssertMetrics(258);
         }
 
@@ -110,13 +99,13 @@ namespace Nethermind.Network.Discovery.Test
         public async Task PongSentReceivedTest()
         {
             ResetMetrics();
-            
+
             PongMsg msg = new(_privateKey2.PublicKey, Timestamper.Default.UnixTime.SecondsLong + 1200, new byte[] { 1, 2, 3 })
             {
                 FarAddress = _address2
             };
-            
-            _discoveryHandlers[0].SendMsg(msg);
+
+            await _discoveryHandlers[0].SendMsg(msg);
             await SleepWhileWaiting();
             _discoveryManagersMocks[1].Received(1).OnIncomingMsg(Arg.Is<DiscoveryMsg>(x => x.MsgType == MsgType.Pong));
 
@@ -124,25 +113,25 @@ namespace Nethermind.Network.Discovery.Test
             {
                 FarAddress = _address
             };
-            _discoveryHandlers[1].SendMsg(msg2);
+            await _discoveryHandlers[1].SendMsg(msg2);
             await SleepWhileWaiting();
             _discoveryManagersMocks[0].Received(1).OnIncomingMsg(Arg.Is<DiscoveryMsg>(x => x.MsgType == MsgType.Pong));
-            
+
             AssertMetrics(240);
         }
-        
+
         [Test]
         [Retry(5)]
         public async Task FindNodeSentReceivedTest()
         {
             ResetMetrics();
-            
+
             FindNodeMsg msg = new(_privateKey2.PublicKey, Timestamper.Default.UnixTime.SecondsLong + 1200, new byte[] { 1, 2, 3 })
             {
                 FarAddress = _address2
             };
-            
-            _discoveryHandlers[0].SendMsg(msg);
+
+            await _discoveryHandlers[0].SendMsg(msg);
             await SleepWhileWaiting();
             _discoveryManagersMocks[1].Received(1).OnIncomingMsg(Arg.Is<DiscoveryMsg>(x => x.MsgType == MsgType.FindNode));
 
@@ -150,11 +139,11 @@ namespace Nethermind.Network.Discovery.Test
             {
                 FarAddress = _address
             };
-            
-            _discoveryHandlers[1].SendMsg(msg2);
+
+            await _discoveryHandlers[1].SendMsg(msg2);
             await SleepWhileWaiting();
             _discoveryManagersMocks[0].Received(1).OnIncomingMsg(Arg.Is<DiscoveryMsg>(x => x.MsgType == MsgType.FindNode));
-            
+
             AssertMetrics(216);
         }
 
@@ -163,13 +152,13 @@ namespace Nethermind.Network.Discovery.Test
         public async Task NeighborsSentReceivedTest()
         {
             ResetMetrics();
-            
+
             NeighborsMsg msg = new(_privateKey2.PublicKey, Timestamper.Default.UnixTime.SecondsLong + 1200, new List<Node>().ToArray())
             {
                 FarAddress = _address2
             };
-            
-            _discoveryHandlers[0].SendMsg(msg);
+
+            await _discoveryHandlers[0].SendMsg(msg);
             await SleepWhileWaiting();
             _discoveryManagersMocks[1].Received(1).OnIncomingMsg(Arg.Is<DiscoveryMsg>(x => x.MsgType == MsgType.Neighbors));
 
@@ -177,19 +166,35 @@ namespace Nethermind.Network.Discovery.Test
             {
                 FarAddress = _address,
             };
-            
-            _discoveryHandlers[1].SendMsg(msg2);
+
+            await _discoveryHandlers[1].SendMsg(msg2);
             await SleepWhileWaiting();
             _discoveryManagersMocks[0].Received(1).OnIncomingMsg(Arg.Is<DiscoveryMsg>(x => x.MsgType == MsgType.Neighbors));
-            
+
             AssertMetrics(210);
+        }
+
+        [Test]
+        public void ForwardsUnrecognizedMessageToNextHandler()
+        {
+            byte[] data = [1, 2, 3];
+            var from = IPEndPoint.Parse("127.0.0.1:10000");
+            var to = IPEndPoint.Parse("127.0.0.1:10003");
+            var packet = new DatagramPacket(Unpooled.WrappedBuffer(data), from, to);
+
+            IChannelHandlerContext ctx = Substitute.For<IChannelHandlerContext>();
+            _discoveryHandlers[0].ChannelRead(ctx, packet);
+
+            ctx.FireChannelRead(Arg.Is<DatagramPacket>(
+                p => p.Content.ReadAllBytesAsArray().SequenceEqual(data)
+            ));
         }
 
         private static void ResetMetrics()
         {
             Metrics.DiscoveryBytesSent = Metrics.DiscoveryBytesReceived = 0;
         }
-        
+
         private static void AssertMetrics(int value)
         {
             Metrics.DiscoveryBytesSent.Should().Be(value);

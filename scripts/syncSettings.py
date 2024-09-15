@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+# SPDX-License-Identifier: LGPL-3.0-only
+
 import json
 import subprocess
 import emoji
@@ -12,7 +15,7 @@ headers = {
     'Content-type': 'application/json',
 }
 
-print(emoji.emojize("Fast Sync configuration settings initialization     :white_check_mark: ", use_aliases=True))
+print(emoji.emojize("Fast Sync configuration settings initialization     :white_check_mark: "))
 
 configs = {
     # fast sync section
@@ -21,40 +24,20 @@ configs = {
         "blockReduced": 1000,
         "multiplierRequirement": 1000
     },
-    "goerli": {
-        "url": "api-goerli.etherscan.io",
-        "blockReduced": 8192,
-        "multiplierRequirement": 30000 
-    },
-    "ropsten": {
-        "url": "api-ropsten.etherscan.io",
+    "gnosis": {
+        "url": "https://rpc.gnosischain.com",
         "blockReduced": 8192,
         "multiplierRequirement": 10000
     },
-    "rinkeby": {
-        "url": "api-rinkeby.etherscan.io",
-        "blockReduced": 8192,
-        "multiplierRequirement": 30000
-    },
-    "kovan": {
-        "url": "api-kovan.etherscan.io",
-        "blockReduced": 8192,
-        "multiplierRequirement": 10000
-    },     
-    "poacore": {
-        "url": "https://core.poa.network",
+    "chiado": {
+        "url": "https://rpc.chiadochain.net",
         "blockReduced": 8192,
         "multiplierRequirement": 10000
     },
-    "xdai": {
-        "url": "https://dai.poa.network",
-        "blockReduced": 8192,
-        "multiplierRequirement": 10000
-    },
-    "sokol": {
-        "url": "https://sokol.poa.network",
-        "blockReduced": 8192,
-        "multiplierRequirement": 10000
+    "sepolia": {
+        "url": "api-sepolia.etherscan.io",
+        "blockReduced": 1000,
+        "multiplierRequirement": 1000
     },
     "energyweb": {
         "url": "https://rpc.energyweb.org",
@@ -65,20 +48,19 @@ configs = {
         "url": "https://volta-rpc.energyweb.org",
         "blockReduced": 8192,
         "multiplierRequirement": 10000
-    },   
-    # mev section
-    "mainnet_mev": {
-        "url": "api.etherscan.io",
-        "blockReduced": 1000,
-        "multiplierRequirement": 1000
     },
-    "goerli_mev": {
-        "url": "api-goerli.etherscan.io",
+    "exosama": {
+        "url": "https://rpc.exosama.com",
         "blockReduced": 8192,
-        "multiplierRequirement": 30000 
+        "multiplierRequirement": 10000
     },
-    "xdai_mev": {
-        "url": "https://dai.poa.network",
+    "joc-mainnet": {
+        "url": "https://rpc-1.japanopenchain.org:8545",
+        "blockReduced": 8192,
+        "multiplierRequirement": 10000
+    },
+    "joc-testnet": {
+        "url": "https://rpc-1.testnet.japanopenchain.org:8545",
         "blockReduced": 8192,
         "multiplierRequirement": 10000
     }
@@ -95,13 +77,13 @@ def fastBlocksSettings(configuration, apiUrl, blockReduced, multiplierRequiremen
 
     baseBlock = latestBlock - blockReduced
     baseBlock = baseBlock - baseBlock % multiplierRequirement
-    
+
     if "etherscan" in apiUrl:
         pivot = json.loads(subprocess.getoutput(f'curl --silent "https://{apiUrl}/api?module=proxy&action=eth_getBlockByNumber&tag={hex(baseBlock)}&boolean=true&apikey={key}"'))
     else:
         data = '{"id":0,"jsonrpc":"2.0","method": "eth_getBlockByNumber","params": ["' +str(hex(baseBlock))+ '", false]}'
         pivot = json.loads(requests.post(apiUrl, headers=headers, data=data).text)
-         
+
     pivotHash = pivot['result']['hash']
     pivotTotalDifficulty = int(pivot['result']['totalDifficulty'],16)
     print(configuration + 'LatestBlock: ' + str(latestBlock))
@@ -118,5 +100,5 @@ def fastBlocksSettings(configuration, apiUrl, blockReduced, multiplierRequiremen
             json.dump(data, mainnetCfgChanged, indent=2)
 
 for config, value in configs.items():
-    print(emoji.emojize(f"{config.capitalize()} section                                     :white_check_mark: ", use_aliases=True))
+    print(emoji.emojize(f"{config.capitalize()} section                                     :white_check_mark: "))
     fastBlocksSettings(config, value['url'], value['blockReduced'], value['multiplierRequirement'])

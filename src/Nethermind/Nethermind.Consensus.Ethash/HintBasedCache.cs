@@ -1,24 +1,12 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Nethermind.Logging;
@@ -27,10 +15,10 @@ namespace Nethermind.Consensus.Ethash
 {
     internal class HintBasedCache
     {
-        private Dictionary<Guid, HashSet<uint>> _epochsPerGuid = new();
-        private Dictionary<uint, int> _epochRefs = new();
-        private Dictionary<uint, Task<IEthashDataSet>> _cachedSets = new();
-        private Dictionary<uint, DataSetWithTime> _recent = new();
+        private readonly Dictionary<Guid, HashSet<uint>> _epochsPerGuid = new();
+        private readonly Dictionary<uint, int> _epochRefs = new();
+        private readonly Dictionary<uint, Task<IEthashDataSet>> _cachedSets = new();
+        private readonly Dictionary<uint, DataSetWithTime> _recent = new();
 
         private struct DataSetWithTime
         {
@@ -39,17 +27,17 @@ namespace Nethermind.Consensus.Ethash
                 Timestamp = timestamp;
                 DataSet = dataSet;
             }
-            
+
             public DateTimeOffset Timestamp { get; set; }
             public Task<IEthashDataSet> DataSet { get; set; }
         }
-        
+
         private int _cachedEpochsCount;
 
         public int CachedEpochsCount => _cachedEpochsCount;
 
         private readonly Func<uint, IEthashDataSet> _createDataSet;
-        private ILogger _logger;
+        private readonly ILogger _logger;
 
         public HintBasedCache(Func<uint, IEthashDataSet> createDataSet, ILogManager logManager)
         {
@@ -60,20 +48,21 @@ namespace Nethermind.Consensus.Ethash
         [MethodImpl(MethodImplOptions.Synchronized)]
         public void Hint(Guid guid, long start, long end)
         {
-            uint startEpoch = (uint) (start / Ethash.EpochLength);
-            uint endEpoch = (uint) (end / Ethash.EpochLength);
+            uint startEpoch = (uint)(start / Ethash.EpochLength);
+            uint endEpoch = (uint)(end / Ethash.EpochLength);
 
             if (endEpoch - startEpoch > 10)
             {
                 throw new InvalidOperationException("Hint too wide");
             }
 
-            if (!_epochsPerGuid.ContainsKey(guid))
+            ref HashSet<uint>? value = ref CollectionsMarshal.GetValueRefOrAddDefault(_epochsPerGuid, guid, out bool exists);
+            if (!exists)
             {
-                _epochsPerGuid[guid] = new HashSet<uint>();
+                value = new HashSet<uint>();
             }
 
-            HashSet<uint> epochForGuid = _epochsPerGuid[guid];
+            HashSet<uint> epochForGuid = value;
             uint currentMin = uint.MaxValue;
             uint currentMax = 0;
             foreach (uint alreadyCachedEpoch in epochForGuid.ToList())
@@ -87,16 +76,16 @@ namespace Nethermind.Consensus.Ethash
                 {
                     currentMax = alreadyCachedEpoch;
                 }
-                
+
                 if (alreadyCachedEpoch < startEpoch || alreadyCachedEpoch > endEpoch)
                 {
                     epochForGuid.Remove(alreadyCachedEpoch);
-                    if (!_epochRefs.ContainsKey(alreadyCachedEpoch))
+                    if (!_epochRefs.TryGetValue(alreadyCachedEpoch, out var epochValue))
                     {
                         throw new InvalidAsynchronousStateException("Epoch ref missing");
                     }
 
-                    _epochRefs[alreadyCachedEpoch] = _epochRefs[alreadyCachedEpoch] - 1;
+                    _epochRefs[alreadyCachedEpoch] = epochValue - 1;
                     if (_epochRefs[alreadyCachedEpoch] == 0)
                     {
                         // _logger.Warn($"Removing data set for epoch {alreadyCachedEpoch}");
@@ -111,37 +100,36 @@ namespace Nethermind.Consensus.Ethash
             {
                 for (long i = startEpoch; i <= endEpoch; i++)
                 {
-                    uint epoch = (uint) i;
-                    if (!epochForGuid.Contains(epoch))
+                    uint epoch = (uint)i;
+                    if (epochForGuid.Add(epoch))
                     {
-                        epochForGuid.Add(epoch);
-                        if (!_epochRefs.ContainsKey(epoch))
+                        if (!_epochRefs.TryGetValue(epoch, out var epochValue))
                         {
-                            _epochRefs[epoch] = 0;
+                            epochValue = 0;
+                            _epochRefs[epoch] = epochValue;
                         }
 
-                        _epochRefs[epoch] = _epochRefs[epoch] + 1;
+                        _epochRefs[epoch] = epochValue + 1;
                         if (_epochRefs[epoch] == 1)
                         {
                             // _logger.Warn($"Building data set for epoch {epoch}");
-                            if (_recent.ContainsKey(epoch))
+                            if (_recent.Remove(epoch, out DataSetWithTime reused))
                             {
-                                _recent.Remove(epoch, out DataSetWithTime reused);
                                 _cachedSets[epoch] = reused.DataSet;
                             }
                             else
                             {
-                                foreach (KeyValuePair<uint,DataSetWithTime> recent in _recent.ToList())
+                                foreach (KeyValuePair<uint, DataSetWithTime> recent in _recent.ToList())
                                 {
                                     if (recent.Value.Timestamp < DateTimeOffset.UtcNow.AddSeconds(-30))
                                     {
                                         _recent.Remove(recent.Key);
                                     }
                                 }
-                                
+
                                 _cachedSets[epoch] = Task<IEthashDataSet>.Run(() => _createDataSet(epoch));
                             }
-                            
+
                             Interlocked.Increment(ref _cachedEpochsCount);
                         }
                     }

@@ -1,19 +1,7 @@
-//  Copyright (c) 2020 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
+using Nethermind.Core;
 using Nethermind.Trie.Pruning;
 
 namespace Nethermind.Trie.Test.Pruning
@@ -21,15 +9,31 @@ namespace Nethermind.Trie.Test.Pruning
     public class TestPruningStrategy : IPruningStrategy
     {
         private readonly bool _pruningEnabled;
-        private readonly bool _shouldPrune;
-        public TestPruningStrategy(bool pruningEnabled, bool shouldPrune = false) 
+        private readonly int _trackedPastKeyCount;
+
+        public TestPruningStrategy(bool pruningEnabled, bool shouldPrune = false, int? maxDepth = null, int trackedPastKeyCount = 0)
         {
             _pruningEnabled = pruningEnabled;
-            _shouldPrune = shouldPrune;
+            ShouldPruneEnabled = shouldPrune;
+            _trackedPastKeyCount = trackedPastKeyCount;
+            MaxDepth = maxDepth ?? (int)Reorganization.MaxDepth;
         }
 
         public bool PruningEnabled => _pruningEnabled;
+        public int MaxDepth { get; set; }
+        public bool ShouldPruneEnabled { get; set; }
 
-        public bool ShouldPrune(in long currentMemory) => _pruningEnabled && _shouldPrune;
+        public int? WithMemoryLimit { get; set; }
+
+        public bool ShouldPrune(in long currentMemory)
+        {
+            if (!_pruningEnabled) return false;
+            if (ShouldPruneEnabled) return true;
+            if (WithMemoryLimit is not null && currentMemory > WithMemoryLimit) return true;
+
+            return false;
+        }
+
+        public int TrackedPastKeyCount => _trackedPastKeyCount;
     }
 }

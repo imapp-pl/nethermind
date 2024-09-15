@@ -1,86 +1,138 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using FastEnumUtility;
+using Nethermind.Core;
 using Nethermind.Db.Rocks.Config;
 using Nethermind.Logging;
 using RocksDbSharp;
+using IWriteBatch = Nethermind.Core.IWriteBatch;
 
-namespace Nethermind.Db.Rocks
+namespace Nethermind.Db.Rocks;
+
+public class ColumnsDb<T> : DbOnTheRocks, IColumnsDb<T> where T : struct, Enum
 {
-    public class ColumnsDb<T> : DbOnTheRocks, IColumnsDb<T> where T : notnull
+    private readonly IDictionary<T, ColumnDb> _columnDbs = new Dictionary<T, ColumnDb>();
+
+    public ColumnsDb(string basePath, DbSettings settings, IDbConfig dbConfig, ILogManager logManager, IReadOnlyList<T> keys, IntPtr? sharedCache = null)
+        : base(basePath, settings, dbConfig, logManager, GetEnumKeys(keys).Select((key) => key.ToString()).ToList(), sharedCache: sharedCache)
     {
-        private readonly IDictionary<T, IDbWithSpan> _columnDbs = new Dictionary<T, IDbWithSpan>();
-        
-        public ColumnsDb(string basePath, RocksDbSettings settings, IDbConfig dbConfig, ILogManager logManager, params T[] keys) 
-            : base(basePath, settings, dbConfig, logManager, GetColumnFamilies(dbConfig, settings.DbName, GetEnumKeys(keys)))
-        {
-            keys = GetEnumKeys(keys);
+        keys = GetEnumKeys(keys);
 
-            foreach (T key in keys)
-            {
-                _columnDbs[key] = new ColumnDb(_db, this, key.ToString()!); 
-            }
+        foreach (T key in keys)
+        {
+            _columnDbs[key] = new ColumnDb(_db, this, key.ToString()!);
+        }
+    }
+
+    protected override long FetchTotalPropertyValue(string propertyName)
+    {
+        long total = 0;
+        foreach (KeyValuePair<T, ColumnDb> kv in _columnDbs)
+        {
+            long value = long.TryParse(_db.GetProperty(propertyName, kv.Value._columnFamily), out long parsedValue)
+                ? parsedValue
+                : 0;
+
+            total += value;
         }
 
-        private static T[] GetEnumKeys(T[] keys)
-        {
-            if (typeof(T).IsEnum && keys.Length == 0)
-            {
-                keys = Enum.GetValues(typeof(T)).Cast<T>().ToArray();
-            }
+        return total;
+    }
 
-            return keys;
+    public override void Compact()
+    {
+        foreach (T key in ColumnKeys)
+        {
+            _columnDbs[key].Compact();
+        }
+    }
+
+    private static IReadOnlyList<T> GetEnumKeys(IReadOnlyList<T> keys)
+    {
+        if (typeof(T).IsEnum && keys.Count == 0)
+        {
+            keys = FastEnum.GetValues<T>().ToArray();
         }
 
-        private static ColumnFamilies GetColumnFamilies(IDbConfig dbConfig, string name, T[] keys)
+        return keys;
+    }
+
+    protected override void BuildOptions<O>(PerTableDbConfig dbConfig, Options<O> options, IntPtr? sharedCache)
+    {
+        base.BuildOptions(dbConfig, options, sharedCache);
+        options.SetCreateMissingColumnFamilies();
+    }
+
+    public IDb GetColumnDb(T key) => _columnDbs[key];
+
+    public IEnumerable<T> ColumnKeys => _columnDbs.Keys;
+
+    public IReadOnlyColumnDb<T> CreateReadOnly(bool createInMemWriteStore)
+    {
+        return new ReadOnlyColumnsDb<T>(this, createInMemWriteStore);
+    }
+
+    public new IColumnsWriteBatch<T> StartWriteBatch()
+    {
+        return new RocksColumnsWriteBatch(this);
+    }
+
+    protected override void ApplyOptions(IDictionary<string, string> options)
+    {
+        string[] keys = options.Select<KeyValuePair<string, string>, string>(e => e.Key).ToArray();
+        string[] values = options.Select<KeyValuePair<string, string>, string>(e => e.Value).ToArray();
+        foreach (KeyValuePair<T, ColumnDb> cols in _columnDbs)
         {
-            InitCache(dbConfig);
-            
-            ColumnFamilies result = new();
-            ulong blockCacheSize = ReadConfig<ulong>(dbConfig, nameof(dbConfig.BlockCacheSize), name);
-            foreach (T key in keys)
-            {
-                ColumnFamilyOptions columnFamilyOptions = new();
-                columnFamilyOptions.OptimizeForPointLookup(blockCacheSize);
-                columnFamilyOptions.SetBlockBasedTableFactory(
-                    new BlockBasedTableOptions()
-                        .SetFilterPolicy(BloomFilterPolicy.Create())
-                        .SetBlockCache(_cache));
-                result.Add(key.ToString(), columnFamilyOptions);
-            }
-            return result;
+            _rocksDbNative.rocksdb_set_options_cf(_db.Handle, cols.Value._columnFamily.Handle, keys.Length, keys, values);
+        }
+        base.ApplyOptions(options);
+    }
+
+    private class RocksColumnsWriteBatch : IColumnsWriteBatch<T>
+    {
+        internal RocksDbWriteBatch _writeBatch;
+        private readonly ColumnsDb<T> _columnsDb;
+
+        public RocksColumnsWriteBatch(ColumnsDb<T> columnsDb)
+        {
+            _writeBatch = new RocksDbWriteBatch(columnsDb);
+            _columnsDb = columnsDb;
         }
 
-        protected override DbOptions BuildOptions(IDbConfig dbConfig)
+        public IWriteBatch GetColumnBatch(T key)
         {
-            DbOptions options = base.BuildOptions(dbConfig);
-            options.SetCreateMissingColumnFamilies();
-            return options;
+            return new RocksColumnWriteBatch(_columnsDb._columnDbs[key], this);
         }
 
-        public IDbWithSpan GetColumnDb(T key) => _columnDbs[key];
-
-        public IEnumerable<T> ColumnKeys => _columnDbs.Keys;
-
-        public IReadOnlyDb CreateReadOnly(bool createInMemWriteStore)
+        public void Dispose()
         {
-            return new ReadOnlyColumnsDb<T>(this, createInMemWriteStore);
+            _writeBatch.Dispose();
+        }
+    }
+
+    private class RocksColumnWriteBatch : IWriteBatch
+    {
+        private readonly ColumnDb _column;
+        private readonly RocksColumnsWriteBatch _writeBatch;
+
+        public RocksColumnWriteBatch(ColumnDb column, RocksColumnsWriteBatch writeBatch)
+        {
+            _column = column;
+            _writeBatch = writeBatch;
+        }
+
+        public void Dispose()
+        {
+            _writeBatch.Dispose();
+        }
+
+        public void Set(ReadOnlySpan<byte> key, byte[]? value, WriteFlags flags = WriteFlags.None)
+        {
+            _writeBatch._writeBatch.Set(key, value, _column._columnFamily, flags);
         }
     }
 }

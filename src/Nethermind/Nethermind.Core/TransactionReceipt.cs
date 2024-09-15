@@ -1,18 +1,5 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
 using Nethermind.Core.Attributes;
@@ -22,36 +9,60 @@ namespace Nethermind.Core
 {
     public class TxReceipt
     {
+        public TxReceipt()
+        {
+        }
+
+        public TxReceipt(TxReceipt other)
+        {
+            TxType = other.TxType;
+            StatusCode = other.StatusCode;
+            BlockNumber = other.BlockNumber;
+            BlockHash = other.BlockHash;
+            TxHash = other.TxHash;
+            Index = other.Index;
+            GasUsed = other.GasUsed;
+            GasUsedTotal = other.GasUsedTotal;
+            Sender = other.Sender;
+            ContractAddress = other.ContractAddress;
+            Recipient = other.Recipient;
+            ReturnValue = other.ReturnValue;
+            PostTransactionState = other.PostTransactionState;
+            Bloom = other.Bloom;
+            Logs = other.Logs;
+            Error = other.Error;
+            SkipStateAndStatusInRlp = other.SkipStateAndStatusInRlp;
+        }
+
         /// <summary>
         /// EIP-2718 transaction type
         /// </summary>
         public TxType TxType { get; set; }
-        
+
         /// <summary>
         ///     EIP-658
         /// </summary>
         public byte StatusCode { get; set; }
         public long BlockNumber { get; set; }
-        public Keccak? BlockHash { get; set; }
-        public Keccak? TxHash { get; set; }
+        public Hash256? BlockHash { get; set; }
+        public Hash256? TxHash { get; set; }
         public int Index { get; set; }
         public long GasUsed { get; set; }
         public long GasUsedTotal { get; set; }
         public Address? Sender { get; set; }
         public Address? ContractAddress { get; set; }
         public Address? Recipient { get; set; }
-        
+
         [Todo(Improve.Refactor, "Receipt tracer?")]
         public byte[]? ReturnValue { get; set; }
-        
+
         /// <summary>
         ///     Removed in EIP-658
         /// </summary>
-        public Keccak? PostTransactionState { get; set; }
+        public Hash256? PostTransactionState { get; set; }
         public Bloom? Bloom { get; set; }
         public LogEntry[]? Logs { get; set; }
         public string? Error { get; set; }
-        public bool Removed { get; set; }
 
         /// <summary>
         /// Ignores receipt output on RLP serialization.
@@ -66,14 +77,14 @@ namespace Nethermind.Core
         /// EIP-2718 transaction type
         /// </summary>
         public TxType TxType { get; set; }
-        
+
         /// <summary>
         ///     EIP-658
         /// </summary>
         public byte StatusCode { get; set; }
         public long BlockNumber { get; set; }
-        public KeccakStructRef BlockHash;
-        public KeccakStructRef TxHash;
+        public Hash256StructRef BlockHash;
+        public Hash256StructRef TxHash;
         public int Index { get; set; }
         public long GasUsed { get; set; }
         public long GasUsedTotal { get; set; }
@@ -87,17 +98,17 @@ namespace Nethermind.Core
         /// <summary>
         ///     Removed in EIP-658
         /// </summary>
-        public KeccakStructRef PostTransactionState;
+        public Hash256StructRef PostTransactionState;
 
         public BloomStructRef Bloom;
-        
+
         /// <summary>
         /// Rlp encoded logs
         /// </summary>
-        public Span<byte> LogsRlp { get; set; }
-        
-        public LogEntry[]? Logs { get; }
-        
+        public ReadOnlySpan<byte> LogsRlp { get; set; }
+
+        public LogEntry[]? Logs { get; set; }
+
         public string? Error { get; set; }
 
         public TxReceiptStructRef(TxReceipt receipt)
@@ -117,7 +128,7 @@ namespace Nethermind.Core
             PostTransactionState = (receipt.PostTransactionState ?? Keccak.Zero).ToStructRef();
             Bloom = (receipt.Bloom ?? Core.Bloom.Empty).ToStructRef();
             Logs = receipt.Logs;
-            LogsRlp = Span<byte>.Empty;
+            LogsRlp = default;
             Error = receipt.Error;
         }
     }

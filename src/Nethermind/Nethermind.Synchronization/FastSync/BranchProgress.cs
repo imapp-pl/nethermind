@@ -1,20 +1,8 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
+using System.Runtime.CompilerServices;
 using System.Text;
 using Nethermind.Logging;
 
@@ -27,24 +15,25 @@ namespace Nethermind.Synchronization.FastSync
     /// **********************+++++++++**++++++++**********+************
     /// ****************************************************************
     /// ++++++++++++++++++*+++++****************************************
-    /// **************************************************************** 
+    /// ****************************************************************
     /// </summary>
     internal class BranchProgress
     {
-        private ILogger _logger;
-        private NodeProgressState[] _syncProgress;
-        
+        private readonly ILogger _logger;
+        private readonly NodeProgressState[] _syncProgress;
+        private long _lastReportMs = 0;
+
         public decimal LastProgress { get; private set; }
         public long CurrentSyncBlock { get; }
 
         public BranchProgress(long syncBlockNumber, ILogger logger)
         {
-            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _logger = logger;
             CurrentSyncBlock = syncBlockNumber;
             _logger.Info($"Now syncing nodes starting from root of block {syncBlockNumber}");
             _syncProgress = new NodeProgressState[256];
         }
-        
+
         private void ReportSyncedLevel1(int childIndex, NodeProgressState nodeProgressState)
         {
             if (childIndex == -1)
@@ -70,7 +59,7 @@ namespace Nethermind.Synchronization.FastSync
                 _syncProgress[index] = newState;
             }
         }
-        
+
         private void ReportSyncedLevel2(int parentIndex, int childIndex, NodeProgressState nodeProgressState)
         {
             if (parentIndex == -1)
@@ -101,7 +90,8 @@ namespace Nethermind.Synchronization.FastSync
                 syncItem.NodeDataType,
                 NodeProgressState.Requested);
         }
-        
+
+        [MethodImpl(MethodImplOptions.Synchronized)]
         public void ReportSynced(int level, int parentIndex, int childIndex, NodeDataType nodeDataType, NodeProgressState nodeProgressState)
         {
             if (level > 2 || nodeDataType != NodeDataType.State)
@@ -135,23 +125,29 @@ namespace Nethermind.Synchronization.FastSync
                 }
             }
 
-            decimal currentProgress = (decimal) savedBranches / _syncProgress.Length;
+            decimal currentProgress = (decimal)savedBranches / _syncProgress.Length;
 
             if (currentProgress == LastProgress)
             {
                 return;
             }
 
-            Metrics.StateBranchProgress = (int) (currentProgress * 100);
+            Metrics.StateBranchProgress = (int)(currentProgress * 100);
             LastProgress = currentProgress;
             if (nodeProgressState == NodeProgressState.Empty)
             {
                 return;
             }
 
-            string detailsString = string.Empty;
-            if (_logger.IsInfo)
+            Progress = (decimal)savedBranches / _syncProgress.Length;
+
+            const long minMillisecondsBetweenReports = 10_000;
+
+            long reportTicksMs = Environment.TickCount64;
+            if (reportTicksMs - _lastReportMs >= minMillisecondsBetweenReports && _logger.IsInfo)
             {
+                _lastReportMs = reportTicksMs;
+
                 StringBuilder builder = new();
                 for (int i = 0; i < _syncProgress.Length; i++)
                 {
@@ -163,30 +159,27 @@ namespace Nethermind.Synchronization.FastSync
                     switch (_syncProgress[i])
                     {
                         case NodeProgressState.Unknown:
-                            builder.Append('?');
+                            builder.Append('▫');
                             break;
                         case NodeProgressState.Empty:
-                            builder.Append('0');
+                            builder.Append('◇');
                             break;
                         case NodeProgressState.AlreadySaved:
-                            builder.Append('1');
+                            builder.Append('◆');
                             break;
                         case NodeProgressState.Saved:
-                            builder.Append('+');
+                            builder.Append('■');
                             break;
                         case NodeProgressState.Requested:
-                            builder.Append('*');
+                            builder.Append('□');
                             break;
                         default:
                             throw new ArgumentOutOfRangeException();
                     }
                 }
 
-                detailsString = builder.ToString();
+                _logger.Info($"Branch sync progress (do not extrapolate): {Progress:p2} of block {CurrentSyncBlock}{builder}");
             }
-
-            Progress = (decimal)savedBranches / _syncProgress.Length;
-            if (_logger.IsInfo) _logger.Info($"Branch sync progress (do not extrapolate): {Progress:p2} of block {CurrentSyncBlock}{detailsString}");
         }
 
         public decimal Progress { get; set; }

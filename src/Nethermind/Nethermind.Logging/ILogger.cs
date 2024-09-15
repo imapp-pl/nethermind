@@ -1,35 +1,96 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2024 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
+using System.Runtime.CompilerServices;
 
-namespace Nethermind.Logging
+namespace Nethermind.Logging;
+
+/// <summary>
+/// Struct to wrap InterfaceLogger in that when created sets values in struct for
+/// IsTrace, IsDebug, IsInfo, IsWarn, IsError so the guards are a fast check inline against
+/// the struct rather than being an interface call each time.
+/// </summary>
+#if DEBUG
+public struct ILogger
+#else
+public readonly struct ILogger
+#endif
 {
-    public interface ILogger
-    {    
-        void Info(string text);
-        void Warn(string text);
-        void Debug(string text);
-        void Trace(string text);
-        void Error(string text, Exception ex = null);
+    private readonly InterfaceLogger _logger;
+#if DEBUG
+    private LogLevel _value;
+#else
+    private readonly LogLevel _value;
+#endif
 
-        bool IsInfo { get; }
-        bool IsWarn { get; }
-        bool IsDebug { get; }
-        bool IsTrace { get; }
-        bool IsError { get; }
+    public ILogger(InterfaceLogger logger)
+    {
+        _logger = logger;
+        if (logger.IsTrace) _value |= LogLevel.Trace;
+        if (logger.IsDebug) _value |= LogLevel.Debug;
+        if (logger.IsInfo) _value |= LogLevel.Info;
+        if (logger.IsWarn) _value |= LogLevel.Warn;
+        if (logger.IsError) _value |= LogLevel.Error;
+    }
+
+    public readonly bool IsTrace => (_value & LogLevel.Trace) != 0;
+    public readonly bool IsDebug => (_value & LogLevel.Debug) != 0;
+    public readonly bool IsInfo => (_value & LogLevel.Info) != 0;
+    public readonly bool IsWarn => (_value & LogLevel.Warn) != 0;
+    public readonly bool IsError => (_value & LogLevel.Error) != 0;
+
+#if DEBUG
+    public void SetDebugMode() => _value |= LogLevel.Debug;
+#endif
+
+    public InterfaceLogger UnderlyingLogger => _logger;
+
+    // We need to use NoInlining as the call sites (should) be already performing the guard checks,
+    // otherwise they will be executing code to build error strings to pass etc, so we don't want to
+    // inline the code for a second check.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public readonly void Debug(string text)
+    {
+        if (IsDebug)
+            _logger.Debug(text);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public readonly void Error(string text, Exception ex = null)
+    {
+        if (IsError)
+            _logger.Error(text, ex);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public readonly void Info(string text)
+    {
+        if (IsInfo)
+            _logger.Info(text);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public readonly void Trace(string text)
+    {
+        if (IsTrace)
+            _logger.Trace(text);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    public readonly void Warn(string text)
+    {
+        if (IsWarn)
+            _logger.Warn(text);
+    }
+
+    [Flags]
+    private enum LogLevel
+    {
+        Trace = 1,
+        Debug = 2,
+        Info = 4,
+        Warn = 8,
+        Error = 16
     }
 }

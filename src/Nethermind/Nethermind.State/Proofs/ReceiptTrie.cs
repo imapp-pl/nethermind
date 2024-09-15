@@ -1,73 +1,66 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
 using Nethermind.Core;
-using Nethermind.Core.Extensions;
+using Nethermind.Core.Buffers;
+using Nethermind.Core.Crypto;
 using Nethermind.Core.Specs;
-using Nethermind.Db;
-using Nethermind.Logging;
 using Nethermind.Serialization.Rlp;
+using Nethermind.State.Trie;
 using Nethermind.Trie;
 
-namespace Nethermind.State.Proofs
-{
-    public class ReceiptTrie : PatriciaTree
-    {
-        private readonly bool _allowProofs;
-        private static readonly ReceiptMessageDecoder Decoder = new();
-        
-        public ReceiptTrie(IReleaseSpec releaseSpec, TxReceipt?[] txReceipts, bool allowProofs = false)
-            : base(allowProofs ? (IDb) new MemDb() : NullDb.Instance, EmptyTreeHash, false, false, NullLogManager.Instance)
-        {
-            _allowProofs = allowProofs;
-            if (txReceipts.Length == 0)
-            {
-                return;
-            }
-            
-            // 3% allocations (2GB) on a Goerli 3M blocks fast sync due to calling receipt encoder hee
-            // avoiding it would require pooling byte arrays and passing them as Spans to temporary trees
-            // a temporary trie would be a trie that exists to create a state root only and then be disposed of
-            for (int i = 0; i < txReceipts.Length; i++)
-            {
-                TxReceipt? currentReceipt = txReceipts[i];
-                byte[] receiptRlp = Decoder.EncodeNew(currentReceipt,
-                    (releaseSpec.IsEip658Enabled
-                        ? RlpBehaviors.Eip658Receipts
-                        : RlpBehaviors.None) | RlpBehaviors.SkipTypedWrapping);
-                
-                
-                Set(Rlp.Encode(i).Bytes, receiptRlp);
-            }
+namespace Nethermind.State.Proofs;
 
-            // additional 3% 2GB is used here for trie nodes creation and root calculation
+/// <summary>
+/// Represents a Patricia trie built of a collection of <see cref="TxReceipt"/>.
+/// </summary>
+public class ReceiptTrie<TReceipt> : PatriciaTrie<TReceipt>
+{
+    private readonly IRlpStreamDecoder<TReceipt> _decoder;
+    /// <inheritdoc/>
+    /// <param name="receipts">The transaction receipts to build the trie of.</param>
+    public ReceiptTrie(IReceiptSpec spec, TReceipt[] receipts, IRlpStreamDecoder<TReceipt> trieDecoder, bool canBuildProof = false, ICappedArrayPool? bufferPool = null)
+        : base(null, canBuildProof, bufferPool: bufferPool)
+    {
+        ArgumentNullException.ThrowIfNull(spec);
+        ArgumentNullException.ThrowIfNull(receipts);
+        ArgumentNullException.ThrowIfNull(trieDecoder);
+        _decoder = trieDecoder;
+
+        if (receipts.Length > 0)
+        {
+            Initialize(receipts, spec);
             UpdateRootHash();
         }
+    }
 
-        public byte[][] BuildProof(int index)
+    private void Initialize(TReceipt[] receipts, IReceiptSpec spec)
+    {
+        RlpBehaviors behavior = (spec.IsEip658Enabled ? RlpBehaviors.Eip658Receipts : RlpBehaviors.None) | RlpBehaviors.SkipTypedWrapping;
+        int key = 0;
+
+        foreach (TReceipt? receipt in receipts)
         {
-            if (!_allowProofs)
-            {
-                throw new InvalidOperationException("Cannot build proofs without underlying DB (for now?)");
-            }
-            
-            ProofCollector proofCollector = new(Rlp.Encode(index).Bytes);
-            Accept(proofCollector, RootHash, new VisitingOptions {ExpectAccounts = false});
-            return proofCollector.BuildResult();
+            CappedArray<byte> buffer = _decoder.EncodeToCappedArray(receipt, behavior, _bufferPool);
+            CappedArray<byte> keyBuffer = (key++).EncodeToCappedArray(_bufferPool);
+
+            Set(keyBuffer.AsSpan(), buffer);
         }
+    }
+
+    protected override void Initialize(TReceipt[] list) => throw new NotSupportedException();
+
+    public static byte[][] CalculateReceiptProofs(IReleaseSpec spec, TReceipt[] receipts, int index, IRlpStreamDecoder<TReceipt> decoder)
+    {
+        using TrackingCappedArrayPool cappedArrayPool = new(receipts.Length * 4);
+        return new ReceiptTrie<TReceipt>(spec, receipts, decoder, canBuildProof: true, cappedArrayPool).BuildProof(index);
+    }
+
+    public static Hash256 CalculateRoot(IReceiptSpec receiptSpec, TReceipt[] txReceipts, IRlpStreamDecoder<TReceipt> decoder)
+    {
+        using TrackingCappedArrayPool cappedArrayPool = new(txReceipts.Length * 4);
+        Hash256 receiptsRoot = new ReceiptTrie<TReceipt>(receiptSpec, txReceipts, decoder, bufferPool: cappedArrayPool).RootHash;
+        return receiptsRoot;
     }
 }

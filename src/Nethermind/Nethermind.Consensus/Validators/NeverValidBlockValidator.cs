@@ -1,18 +1,5 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using Nethermind.Core;
 
@@ -20,7 +7,7 @@ namespace Nethermind.Consensus.Validators
 {
     public class NeverValidBlockValidator : IBlockValidator
     {
-        public bool ValidateHash(BlockHeader header)
+        public static bool ValidateHash(BlockHeader header)
         {
             return false;
         }
@@ -29,9 +16,20 @@ namespace Nethermind.Consensus.Validators
         {
             return false;
         }
+        public bool Validate(BlockHeader header, BlockHeader? parent, bool isUncle, out string? error)
+        {
+            error = null;
+            return false;
+        }
 
         public bool Validate(BlockHeader header, bool isUncle)
         {
+            return false;
+        }
+
+        public bool Validate(BlockHeader header, bool isUncle, out string? error)
+        {
+            error = null;
             return false;
         }
 
@@ -44,5 +42,30 @@ namespace Nethermind.Consensus.Validators
         {
             return false;
         }
+
+        public bool ValidateWithdrawals(Block block, out string? error)
+        {
+            error = null;
+            return false;
+        }
+
+        public bool ValidateOrphanedBlock(Block block, out string? error)
+        {
+            error = null;
+            return false;
+        }
+
+        public bool ValidateSuggestedBlock(Block block, out string? error, bool validateHashes = true)
+        {
+            error = null;
+            return false;
+        }
+
+        public bool ValidateProcessedBlock(Block processedBlock, TxReceipt[] receipts, Block suggestedBlock, out string? error)
+        {
+            error = null;
+            return false;
+        }
+
     }
 }

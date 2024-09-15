@@ -1,64 +1,62 @@
-﻿//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
-// 
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
+using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
+using Nethermind.Blockchain;
 using Nethermind.Core;
 using Nethermind.Core.Specs;
+using Nethermind.Evm;
 using Nethermind.Evm.Tracing;
 using Nethermind.Evm.TransactionProcessing;
 using Nethermind.State;
+using Metrics = Nethermind.Evm.Metrics;
 
 namespace Nethermind.Consensus.Processing
 {
     public partial class BlockProcessor
     {
-        public class BlockValidationTransactionsExecutor : IBlockProcessor.IBlockTransactionsExecutor
+        public class BlockValidationTransactionsExecutor(
+            ITransactionProcessorAdapter transactionProcessor,
+            IWorldState stateProvider)
+            : IBlockProcessor.IBlockTransactionsExecutor
         {
-            private readonly ITransactionProcessorAdapter _transactionProcessor;
-            private readonly IStateProvider _stateProvider;
-
-            public BlockValidationTransactionsExecutor(ITransactionProcessor transactionProcessor, IStateProvider stateProvider)
+            public BlockValidationTransactionsExecutor(ITransactionProcessor transactionProcessor, IWorldState stateProvider)
                 : this(new ExecuteTransactionProcessorAdapter(transactionProcessor), stateProvider)
             {
             }
 
-            public BlockValidationTransactionsExecutor(ITransactionProcessorAdapter transactionProcessor, IStateProvider stateProvider)
-            {
-                _transactionProcessor = transactionProcessor;
-                _stateProvider = stateProvider;
-            }
+            public event EventHandler<TxProcessedEventArgs>? TransactionProcessed;
 
-            public event EventHandler<TxProcessedEventArgs>? TransactionProcessed; 
-        
             public TxReceipt[] ProcessTransactions(Block block, ProcessingOptions processingOptions, BlockReceiptsTracer receiptsTracer, IReleaseSpec spec)
             {
+                Metrics.ResetBlockStats();
+                BlockExecutionContext blkCtx = CreateBlockExecutionContext(block);
                 for (int i = 0; i < block.Transactions.Length; i++)
                 {
+                    block.TransactionProcessed = i;
                     Transaction currentTx = block.Transactions[i];
-                    ProcessTransaction(block, currentTx, i, receiptsTracer, processingOptions);
+                    ProcessTransaction(in blkCtx, currentTx, i, receiptsTracer, processingOptions);
                 }
                 return receiptsTracer.TxReceipts.ToArray();
             }
-        
-            private void ProcessTransaction(Block block, Transaction currentTx, int index, BlockReceiptsTracer receiptsTracer, ProcessingOptions processingOptions)
+
+            protected virtual BlockExecutionContext CreateBlockExecutionContext(Block block) => new(block.Header);
+
+            protected virtual void ProcessTransaction(in BlockExecutionContext blkCtx, Transaction currentTx, int index, BlockReceiptsTracer receiptsTracer, ProcessingOptions processingOptions)
             {
-                _transactionProcessor.ProcessTransaction(block, currentTx, receiptsTracer, processingOptions, _stateProvider);
+                TransactionResult result = transactionProcessor.ProcessTransaction(in blkCtx, currentTx, receiptsTracer, processingOptions, stateProvider);
+                if (!result) ThrowInvalidBlockException(result, blkCtx.Header, currentTx, index);
                 TransactionProcessed?.Invoke(this, new TxProcessedEventArgs(index, currentTx, receiptsTracer.TxReceipts[index]));
+            }
+
+            [DoesNotReturn]
+            [StackTraceHidden]
+            private void ThrowInvalidBlockException(TransactionResult result, BlockHeader header, Transaction currentTx, int index)
+            {
+                throw new InvalidBlockException(header, $"Transaction {currentTx.Hash} at index {index} failed with error {result.Error}");
             }
         }
     }

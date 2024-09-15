@@ -1,45 +1,32 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
-//
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
-
+using FastEnumUtility;
+using Nethermind.Config;
 using Nethermind.JsonRpc.Modules;
 
 namespace Nethermind.JsonRpc
 {
     public class JsonRpcUrl : IEquatable<JsonRpcUrl>, ICloneable
     {
-        public JsonRpcUrl(string scheme, string host, int port, RpcEndpoint rpcEndpoint, bool isAuthenticated, string[] enabledModules)
+        public JsonRpcUrl(string scheme, string host, int port, RpcEndpoint rpcEndpoint, bool isAuthenticated, string[] enabledModules, long? maxRequestBodySize = null)
         {
             Scheme = scheme;
             Host = host;
             Port = port;
             RpcEndpoint = rpcEndpoint;
-            EnabledModules = enabledModules;
+            EnabledModules = new HashSet<string>(enabledModules, StringComparer.InvariantCultureIgnoreCase);
             IsAuthenticated = isAuthenticated;
+            MaxRequestBodySize = maxRequestBodySize;
         }
 
         public static JsonRpcUrl Parse(string packedUrlValue)
         {
-            if (packedUrlValue == null)
-                throw new ArgumentNullException(nameof(packedUrlValue));
+            ArgumentNullException.ThrowIfNull(packedUrlValue);
 
             string[] parts = packedUrlValue.Split('|');
             if (parts.Length != 3 && parts.Length != 4)
@@ -48,7 +35,7 @@ namespace Nethermind.JsonRpc
             string url = parts[0];
             if (!Uri.TryCreate(url, UriKind.Absolute, out Uri? uri) ||
                 (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps) ||
-                uri.Segments.Count() > 1 ||
+                uri.Segments.Length > 1 ||
                 uri.Port == 0)
                 throw new FormatException("First part must be a valid url with the format: scheme://host:port");
 
@@ -59,7 +46,7 @@ namespace Nethermind.JsonRpc
             RpcEndpoint endpoint = RpcEndpoint.None;
             foreach (string endpointValue in endpointValues)
             {
-                if (Enum.TryParse(endpointValue, ignoreCase: true, out RpcEndpoint parsedEndpoint) &&
+                if (FastEnum.TryParse(endpointValue, ignoreCase: true, out RpcEndpoint parsedEndpoint) &&
                     (parsedEndpoint == RpcEndpoint.Http || parsedEndpoint == RpcEndpoint.Ws))
                     endpoint |= parsedEndpoint;
             }
@@ -71,7 +58,7 @@ namespace Nethermind.JsonRpc
             if (enabledModules.Length == 0)
                 throw new FormatException("Third part must contain at least one module delimited by ';'");
 
-            bool isAuthenticated = enabledModules.Any(m => m.ToLower() == "engine");
+            bool isAuthenticated = enabledModules.Contains(ModuleType.Engine, StringComparison.InvariantCultureIgnoreCase);
 
             // Check if authentication disabled for this url
             if (parts.Length == 4)
@@ -84,21 +71,25 @@ namespace Nethermind.JsonRpc
                 isAuthenticated = false;
             }
 
-            JsonRpcUrl result = new (uri.Scheme, uri.Host, uri.Port, endpoint, isAuthenticated, enabledModules);
+            JsonRpcUrl result = new(uri.Scheme, uri.Host, uri.Port, endpoint, isAuthenticated, enabledModules);
 
-           return result;
+            return result;
         }
 
-        public bool IsAuthenticated { get; private set; }
+        public long? MaxRequestBodySize { get; }
+        public bool IsAuthenticated { get; }
         public string Scheme { get; set; }
         public string Host { get; set; }
         public int Port { get; set; }
         public RpcEndpoint RpcEndpoint { get; set; }
         public IReadOnlyCollection<string> EnabledModules { get; set; }
 
+        public bool IsModuleEnabled(string moduleName) =>
+            EnabledModules.Any(m => StringComparer.InvariantCultureIgnoreCase.Equals(m, moduleName));
+
         public bool Equals(JsonRpcUrl other)
         {
-            if (other == null)
+            if (other is null)
                 return false;
 
             if (ReferenceEquals(this, other))
@@ -108,12 +99,14 @@ namespace Nethermind.JsonRpc
                    string.Equals(Host, other.Host) &&
                    Port == other.Port &&
                    RpcEndpoint == other.RpcEndpoint &&
-                   EnabledModules.SequenceEqual(other.EnabledModules);
+                   IsAuthenticated == other.IsAuthenticated &&
+                   EnabledModules.OrderBy(t => t).SequenceEqual(other.EnabledModules.OrderBy(t => t),
+                       StringComparer.InvariantCultureIgnoreCase);
         }
 
         public override bool Equals(object other)
         {
-            if (other == null)
+            if (other is null)
                 return false;
 
             if (ReferenceEquals(this, other))
@@ -123,7 +116,7 @@ namespace Nethermind.JsonRpc
         }
 
         public override int GetHashCode() => HashCode.Combine(Scheme, Host, Port, RpcEndpoint, EnabledModules as IStructuralEquatable);
-        public object Clone() => new JsonRpcUrl(Scheme, Host, Port, RpcEndpoint, IsAuthenticated, EnabledModules as string[]);
+        public object Clone() => new JsonRpcUrl(Scheme, Host, Port, RpcEndpoint, IsAuthenticated, EnabledModules.ToArray());
         public override string ToString() => $"{Scheme}://{Host}:{Port}";
     }
 }

@@ -1,18 +1,5 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
 using System.Collections.Generic;
@@ -20,6 +7,7 @@ using System.IO;
 using System.Linq;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Runtime.Loader;
 using Jint.Native;
 using Jint.Native.Object;
@@ -58,10 +46,7 @@ namespace Nethermind.Cli.Modules
         /// <exception cref="ArgumentNullException"></exception>
         private static Delegate CreateDelegate(MethodInfo methodInfo, CliModuleBase module)
         {
-            if (methodInfo == null)
-            {
-                throw new ArgumentNullException(nameof(methodInfo));
-            }
+            ArgumentNullException.ThrowIfNull(methodInfo);
 
             ParameterInfo[] parameterInfos = methodInfo.GetParameters();
             Type[] types = new Type[parameterInfos.Length + 1];
@@ -78,10 +63,10 @@ namespace Nethermind.Cli.Modules
         private void LoadModule(CliModuleBase module)
         {
             CliModuleAttribute? cliModuleAttribute = module.GetType().GetCustomAttribute<CliModuleAttribute>();
-            if (cliModuleAttribute == null)
+            if (cliModuleAttribute is null)
             {
                 _cliConsole.WriteErrorLine(
-                    $"Could not load module {module.GetType().Name} bacause of a missing {nameof(CliModuleAttribute)}.");
+                    $"Could not load module {module.GetType().Name} because of a missing {nameof(CliModuleAttribute)}.");
                 return;
             }
 
@@ -95,29 +80,27 @@ namespace Nethermind.Cli.Modules
                 var cliProperty = methodInfo.GetCustomAttribute<CliPropertyAttribute>();
                 var cliFunction = methodInfo.GetCustomAttribute<CliFunctionAttribute>();
 
-                bool isProperty = cliProperty != null;
+                bool isProperty = cliProperty is not null;
 
                 string? objectName = cliProperty?.ObjectName ?? cliFunction?.ObjectName;
                 string? itemName = cliProperty?.PropertyName ?? cliFunction?.FunctionName;
 
-                if (objectName == null)
+                if (objectName is null)
                 {
                     throw new InvalidDataException($"Method {methodInfo.Name} of {module.GetType().Name} should be decorated with one of {nameof(CliPropertyAttribute)} or {nameof(CliFunctionAttribute)}");
                 }
 
-                ObjectInstance instance;
-                if (!_objects.ContainsKey(objectName))
+                ref ObjectInstance? instance = ref CollectionsMarshal.GetValueRefOrAddDefault(_objects, objectName, out bool exists);
+                if (!exists)
                 {
                     instance = _engine.JintEngine.Object.Construct(Arguments.Empty);
                     _engine.JintEngine.SetValue(objectName, instance);
-                    _objects[objectName] = instance;
                 }
 
-                instance = _objects[objectName];
-                var @delegate = CreateDelegate(methodInfo, module);
+                Delegate @delegate = CreateDelegate(methodInfo, module);
                 DelegateWrapper nativeDelegate = new DelegateWrapper(_engine.JintEngine, @delegate);
 
-                if (itemName != null)
+                if (itemName is not null)
                 {
                     if (isProperty)
                     {
@@ -125,7 +108,7 @@ namespace Nethermind.Cli.Modules
                         _cliConsole.WriteLine($".{itemName}");
 
                         MethodsByModules[objectName].Add(itemName);
-                        AddProperty(instance, itemName, nativeDelegate);
+                        AddProperty(instance!, itemName, nativeDelegate);
                     }
                     else
                     {
@@ -133,7 +116,7 @@ namespace Nethermind.Cli.Modules
                         _cliConsole.WriteLine($".{itemName}({string.Join(", ", methodInfo.GetParameters().Select(p => p.Name))})");
 
                         MethodsByModules[objectName].Add(itemName + "(");
-                        AddMethod(instance, itemName, nativeDelegate);
+                        AddMethod(instance!, itemName, nativeDelegate);
                     }
                 }
             }
@@ -197,8 +180,8 @@ namespace Nethermind.Cli.Modules
 
         private bool IsCliModule(Type type)
         {
-            bool isCliModule = typeof(CliModuleBase).IsAssignableFrom(type);
-            bool hasAttribute = type.GetCustomAttribute<CliModuleAttribute>() != null;
+            bool isCliModule = !type.IsAbstract && typeof(CliModuleBase).IsAssignableFrom(type);
+            bool hasAttribute = type.GetCustomAttribute<CliModuleAttribute>() is not null;
             if (isCliModule && !hasAttribute)
             {
                 _cliConsole.WriteInteresting(
@@ -217,10 +200,10 @@ namespace Nethermind.Cli.Modules
         // ReSharper disable once MemberCanBePrivate.Global
         public void LoadModule(Type type)
         {
-            ConstructorInfo? ctor = type.GetConstructor(new[] {typeof(ICliEngine), typeof(INodeManager)});
-            if (ctor != null)
+            ConstructorInfo? ctor = type.GetConstructor(new[] { typeof(ICliEngine), typeof(INodeManager) });
+            if (ctor is not null)
             {
-                CliModuleBase module = (CliModuleBase) ctor.Invoke(new object[] {_engine, _client});
+                CliModuleBase module = (CliModuleBase)ctor.Invoke(new object[] { _engine, _client });
                 LoadModule(module);
             }
             else
@@ -230,7 +213,7 @@ namespace Nethermind.Cli.Modules
             }
         }
 
-        private Dictionary<string, ObjectInstance> _objects = new Dictionary<string, ObjectInstance>();
+        private readonly Dictionary<string, ObjectInstance> _objects = new Dictionary<string, ObjectInstance>();
 
         private static void AddMethod(ObjectInstance instance, string name, DelegateWrapper delegateWrapper)
         {

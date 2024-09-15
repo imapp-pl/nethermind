@@ -1,21 +1,9 @@
-﻿//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using Nethermind.Blockchain;
 using Nethermind.Blockchain.Filters;
 using Nethermind.Blockchain.Find;
@@ -32,10 +20,15 @@ using Nethermind.TxPool;
 using Block = Nethermind.Core.Block;
 using System.Threading;
 using Nethermind.Consensus.Processing;
-using Nethermind.Core.Eip2930;
 using Nethermind.Core.Specs;
 using Nethermind.Evm.TransactionProcessing;
+using Nethermind.Facade.Filters;
 using Nethermind.State;
+using Nethermind.Core.Extensions;
+using Nethermind.Config;
+using Nethermind.Facade.Proxy.Models.Simulate;
+using Nethermind.Facade.Simulate;
+using Transaction = Nethermind.Core.Transaction;
 
 namespace Nethermind.Facade
 {
@@ -43,11 +36,13 @@ namespace Nethermind.Facade
     {
         IBlockchainBridge CreateBlockchainBridge();
     }
-    
+
     [Todo(Improve.Refactor, "I want to remove BlockchainBridge, split it into something with logging, state and tx processing. Then we can start using independent modules.")]
     public class BlockchainBridge : IBlockchainBridge
     {
-        private readonly ReadOnlyTxProcessingEnv _processingEnv;
+        private readonly IReadOnlyTxProcessorSource _processingEnv;
+        private readonly IBlockTree _blockTree;
+        private readonly IStateReader _stateReader;
         private readonly ITxPool _txPool;
         private readonly IFilterStore _filterStore;
         private readonly IEthereumEcdsa _ecdsa;
@@ -56,8 +51,11 @@ namespace Nethermind.Facade
         private readonly IReceiptFinder _receiptFinder;
         private readonly ILogFinder _logFinder;
         private readonly ISpecProvider _specProvider;
+        private readonly IBlocksConfig _blocksConfig;
+        private readonly SimulateBridgeHelper _simulateBridgeHelper;
 
         public BlockchainBridge(ReadOnlyTxProcessingEnv processingEnv,
+            SimulateReadOnlyBlocksProcessingEnvFactory simulateProcessingEnvFactory,
             ITxPool? txPool,
             IReceiptFinder? receiptStorage,
             IFilterStore? filterStore,
@@ -66,9 +64,12 @@ namespace Nethermind.Facade
             ITimestamper? timestamper,
             ILogFinder? logFinder,
             ISpecProvider specProvider,
+            IBlocksConfig blocksConfig,
             bool isMining)
         {
             _processingEnv = processingEnv ?? throw new ArgumentNullException(nameof(processingEnv));
+            _blockTree = processingEnv.BlockTree;
+            _stateReader = processingEnv.StateReader;
             _txPool = txPool ?? throw new ArgumentNullException(nameof(_txPool));
             _receiptFinder = receiptStorage ?? throw new ArgumentNullException(nameof(receiptStorage));
             _filterStore = filterStore ?? throw new ArgumentNullException(nameof(filterStore));
@@ -77,89 +78,79 @@ namespace Nethermind.Facade
             _timestamper = timestamper ?? throw new ArgumentNullException(nameof(timestamper));
             _logFinder = logFinder ?? throw new ArgumentNullException(nameof(logFinder));
             _specProvider = specProvider ?? throw new ArgumentNullException(nameof(specProvider));
+            _blocksConfig = blocksConfig;
             IsMining = isMining;
+            _simulateBridgeHelper = new SimulateBridgeHelper(
+                simulateProcessingEnvFactory ?? throw new ArgumentNullException(nameof(simulateProcessingEnvFactory)),
+                _blocksConfig);
         }
-        
+
         public Block? HeadBlock
         {
             get
             {
-                return _processingEnv.BlockTree.Head;    
+                return _blockTree.Head;
             }
         }
 
         public bool IsMining { get; }
 
-        public (TxReceipt Receipt, UInt256? EffectiveGasPrice) GetReceiptAndEffectiveGasPrice(Keccak txHash)
+        private bool TryGetCanonicalTransaction(
+            Hash256 txHash,
+            [NotNullWhen(true)] out Transaction? transaction,
+            [NotNullWhen(true)] out TxReceipt? receipt,
+            [NotNullWhen(true)] out Block? block,
+            [NotNullWhen(true)] out TxReceipt[]? receipts)
         {
-            Keccak blockHash = _receiptFinder.FindBlockHash(txHash);
-            if (blockHash != null)
-            {
-                Block block = _processingEnv.BlockTree.FindBlock(blockHash, BlockTreeLookupOptions.TotalDifficultyNotNeeded);
-                TxReceipt txReceipt = _receiptFinder.Get(block).ForTransaction(txHash);
-                Transaction tx = block?.Transactions[txReceipt.Index];
-                bool is1559Enabled = _specProvider.GetSpec(block.Number).IsEip1559Enabled;
-                UInt256 effectiveGasPrice = tx.CalculateEffectiveGasPrice(is1559Enabled, block.Header.BaseFeePerGas);
-                
-                return (txReceipt, effectiveGasPrice);
-            }
-
-            return (null, null);
-        }
-
-        public (TxReceipt Receipt, Transaction Transaction, UInt256? baseFee) GetTransaction(Keccak txHash)
-        {
-            Keccak blockHash = _receiptFinder.FindBlockHash(txHash);
+            Hash256 blockHash = _receiptFinder.FindBlockHash(txHash);
             if (blockHash is not null)
             {
-                Block block = _processingEnv.BlockTree.FindBlock(blockHash, BlockTreeLookupOptions.TotalDifficultyNotNeeded);
-                TxReceipt txReceipt = _receiptFinder.Get(block).ForTransaction(txHash);
-                return (txReceipt, block?.Transactions[txReceipt.Index], block?.BaseFeePerGas);
+                block = _blockTree.FindBlock(blockHash, BlockTreeLookupOptions.RequireCanonical);
+                if (block is not null)
+                {
+                    receipts = _receiptFinder.Get(block);
+                    receipt = receipts.ForTransaction(txHash);
+                    transaction = block.Transactions[receipt.Index];
+                    return true;
+                }
             }
 
-            if (_txPool.TryGetPendingTransaction(txHash, out Transaction? transaction))
-            {
-                return (null, transaction, null);
-            }
-
-            return (null, null, null);
+            transaction = null;
+            receipt = null;
+            receipts = null;
+            block = null;
+            return false;
         }
 
-        public TxReceipt? GetReceipt(Keccak txHash)
+        public (TxReceipt? Receipt, TxGasInfo? GasInfo, int LogIndexStart) GetReceiptAndGasInfo(Hash256 txHash)
         {
-            Keccak? blockHash = _receiptFinder.FindBlockHash(txHash);
+            if (TryGetCanonicalTransaction(txHash, out Transaction? tx, out TxReceipt? txReceipt, out Block? block, out TxReceipt[]? txReceipts))
+            {
+                int logIndexStart = txReceipts.GetBlockLogFirstIndex(txReceipt.Index);
+                bool is1559Enabled = _specProvider.GetSpecFor1559(block.Number).IsEip1559Enabled;
+                return (txReceipt, tx.GetGasInfo(is1559Enabled, block.Header), logIndexStart);
+            }
+
+            return (null, null, 0);
+        }
+
+        public (TxReceipt? Receipt, Transaction Transaction, UInt256? baseFee) GetTransaction(Hash256 txHash, bool checkTxnPool = true) =>
+            TryGetCanonicalTransaction(txHash, out Transaction? tx, out TxReceipt? txReceipt, out Block? block, out TxReceipt[]? _)
+                ? (txReceipt, tx, block.BaseFeePerGas)
+                : checkTxnPool && _txPool.TryGetPendingTransaction(txHash, out Transaction? transaction)
+                    ? (null, transaction, null)
+                    : (null, null, null);
+
+        public TxReceipt? GetReceipt(Hash256 txHash)
+        {
+            Hash256? blockHash = _receiptFinder.FindBlockHash(txHash);
             return blockHash is not null ? _receiptFinder.Get(blockHash).ForTransaction(txHash) : null;
-        }
-
-        public class CallOutput
-        {
-            public CallOutput()
-            {
-            }
-
-            public CallOutput(byte[] outputData, long gasSpent, string error, bool inputError = false)
-            {
-                Error = error;
-                OutputData = outputData;
-                GasSpent = gasSpent;
-                InputError = inputError;
-            }
-
-            public string? Error { get; set; }
-
-            public byte[] OutputData { get; set; }
-
-            public long GasSpent { get; set; }
-            
-            public bool InputError { get; set; }
-            
-            public AccessList? AccessList { get; set; }
         }
 
         public CallOutput Call(BlockHeader header, Transaction tx, CancellationToken cancellationToken)
         {
             CallOutputTracer callOutputTracer = new();
-            (bool Success, string Error) tryCallResult = TryCallAndRestore(header, header.Timestamp, tx, false,
+            TransactionResult tryCallResult = TryCallAndRestore(header, tx, false,
                 callOutputTracer.WithCancellation(cancellationToken));
             return new CallOutput
             {
@@ -170,25 +161,47 @@ namespace Nethermind.Facade
             };
         }
 
-        public CallOutput EstimateGas(BlockHeader header, Transaction tx, CancellationToken cancellationToken)
+        public SimulateOutput Simulate(BlockHeader header, SimulatePayload<TransactionWithSourceDetails> payload, CancellationToken cancellationToken)
         {
-            using IReadOnlyTransactionProcessor? readOnlyTransactionProcessor = _processingEnv.Build(header.StateRoot!);
-            
+            SimulateBlockTracer simulateOutputTracer = new(payload.TraceTransfers, payload.ReturnFullTransactionObjects, _specProvider);
+            BlockReceiptsTracer tracer = new();
+            tracer.SetOtherTracer(simulateOutputTracer);
+            SimulateOutput result = new();
+            try
+            {
+                if (!_simulateBridgeHelper.TrySimulate(header, payload, simulateOutputTracer, new CancellationBlockTracer(tracer, cancellationToken), out string error))
+                {
+                    result.Error = error;
+                }
+            }
+            catch (Exception ex)
+            {
+                result.Error = ex.ToString();
+            }
+
+            result.Items = simulateOutputTracer.Results;
+            return result;
+        }
+
+        public CallOutput EstimateGas(BlockHeader header, Transaction tx, int errorMargin, CancellationToken cancellationToken)
+        {
+            using IReadOnlyTxProcessingScope scope = _processingEnv.Build(header.StateRoot!);
+
             EstimateGasTracer estimateGasTracer = new();
-            (bool Success, string Error) tryCallResult = TryCallAndRestore(
+            TransactionResult tryCallResult = TryCallAndRestore(
                 header,
-                UInt256.Max(header.Timestamp + 1, _timestamper.UnixTime.Seconds),
                 tx,
                 true,
                 estimateGasTracer.WithCancellation(cancellationToken));
-            
-            GasEstimator gasEstimator = new(readOnlyTransactionProcessor, _processingEnv.StateProvider, _specProvider);
-            long estimate = gasEstimator.Estimate(tx, header, estimateGasTracer);
 
-            return new CallOutput 
+            GasEstimator gasEstimator = new(scope.TransactionProcessor, scope.WorldState,
+                _specProvider, _blocksConfig);
+            long estimate = gasEstimator.Estimate(tx, header, estimateGasTracer, errorMargin, cancellationToken);
+
+            return new CallOutput
             {
-                Error = tryCallResult.Success ? estimateGasTracer.Error : tryCallResult.Error, 
-                GasSpent = estimate, 
+                Error = tryCallResult.Success ? estimateGasTracer.Error : tryCallResult.Error,
+                GasSpent = estimate,
                 InputError = !tryCallResult.Success
             };
         }
@@ -196,14 +209,14 @@ namespace Nethermind.Facade
         public CallOutput CreateAccessList(BlockHeader header, Transaction tx, CancellationToken cancellationToken, bool optimize)
         {
             CallOutputTracer callOutputTracer = new();
-            AccessTxTracer accessTxTracer = optimize 
-                ? new(tx.SenderAddress, 
-                    tx.GetRecipient(tx.IsContractCreation ? _processingEnv.StateReader.GetNonce(header.StateRoot, tx.SenderAddress) : 0)) 
-                : new();
+            AccessTxTracer accessTxTracer = optimize
+                ? new(tx.SenderAddress,
+                    tx.GetRecipient(tx.IsContractCreation ? _stateReader.GetNonce(header.StateRoot, tx.SenderAddress) : 0), header.GasBeneficiary)
+                : new(header.GasBeneficiary);
 
-            (bool Success, string Error) tryCallResult = TryCallAndRestore(header, header.Timestamp, tx, false,
+            TransactionResult tryCallResult = TryCallAndRestore(header, tx, false,
                 new CompositeTxTracer(callOutputTracer, accessTxTracer).WithCancellation(cancellationToken));
-            
+
             return new CallOutput
             {
                 Error = tryCallResult.Success ? callOutputTracer.Error : tryCallResult.Error,
@@ -214,103 +227,144 @@ namespace Nethermind.Facade
             };
         }
 
-        private (bool Success, string Error) TryCallAndRestore(
+        private TransactionResult TryCallAndRestore(
             BlockHeader blockHeader,
-            in UInt256 timestamp,
             Transaction transaction,
             bool treatBlockHeaderAsParentBlock,
             ITxTracer tracer)
         {
             try
             {
-                CallAndRestore(blockHeader, timestamp, transaction, treatBlockHeaderAsParentBlock, tracer);
-                return (true, string.Empty);
+                return CallAndRestore(blockHeader, transaction, treatBlockHeaderAsParentBlock, tracer);
             }
             catch (InsufficientBalanceException ex)
             {
-                return (false, ex.Message);
+                return new TransactionResult(ex.Message);
             }
         }
 
-        private void CallAndRestore(
+        private TransactionResult CallAndRestore(
             BlockHeader blockHeader,
-            in UInt256 timestamp,
             Transaction transaction,
             bool treatBlockHeaderAsParentBlock,
             ITxTracer tracer)
         {
-            if (transaction.SenderAddress == null)
-            {
-                transaction.SenderAddress = Address.SystemUser;
-            }
+            transaction.SenderAddress ??= Address.SystemUser;
 
-            Keccak stateRoot = blockHeader.StateRoot!;
-            using IReadOnlyTransactionProcessor transactionProcessor = _processingEnv.Build(stateRoot);
+            Hash256 stateRoot = blockHeader.StateRoot!;
+            using IReadOnlyTxProcessingScope scope = _processingEnv.Build(stateRoot);
 
             if (transaction.Nonce == 0)
             {
                 transaction.Nonce = GetNonce(stateRoot, transaction.SenderAddress);
             }
 
-            BlockHeader callHeader = new(
-                blockHeader.Hash!,
-                Keccak.OfAnEmptySequenceRlp,
-                Address.Zero,
-                0,
-                treatBlockHeaderAsParentBlock ? blockHeader.Number + 1 : blockHeader.Number,
-                blockHeader.GasLimit,
-                timestamp,
-                Array.Empty<byte>());
+            BlockHeader callHeader = treatBlockHeaderAsParentBlock
+                ? new(
+                    blockHeader.Hash!,
+                    Keccak.OfAnEmptySequenceRlp,
+                    Address.Zero,
+                    UInt256.Zero,
+                    blockHeader.Number + 1,
+                    blockHeader.GasLimit,
+                    Math.Max(blockHeader.Timestamp + _blocksConfig.SecondsPerSlot, _timestamper.UnixTime.Seconds),
+                    Array.Empty<byte>())
+                : new(
+                    blockHeader.ParentHash!,
+                    blockHeader.UnclesHash!,
+                    blockHeader.Beneficiary!,
+                    blockHeader.Difficulty,
+                    blockHeader.Number,
+                    blockHeader.GasLimit,
+                    blockHeader.Timestamp,
+                    blockHeader.ExtraData);
 
+            IReleaseSpec releaseSpec = _specProvider.GetSpec(callHeader);
             callHeader.BaseFeePerGas = treatBlockHeaderAsParentBlock
-                ? BaseFeeCalculator.Calculate(blockHeader, _specProvider.GetSpec(callHeader.Number))
+                ? BaseFeeCalculator.Calculate(blockHeader, releaseSpec)
                 : blockHeader.BaseFeePerGas;
 
+            if (releaseSpec.IsEip4844Enabled)
+            {
+                callHeader.BlobGasUsed = BlobGasCalculator.CalculateBlobGas(transaction);
+                callHeader.ExcessBlobGas = treatBlockHeaderAsParentBlock
+                    ? BlobGasCalculator.CalculateExcessBlobGas(blockHeader, releaseSpec)
+                    : blockHeader.ExcessBlobGas;
+            }
+            callHeader.MixHash = blockHeader.MixHash;
+            callHeader.IsPostMerge = blockHeader.Difficulty == 0;
             transaction.Hash = transaction.CalculateHash();
-            transactionProcessor.CallAndRestore(transaction, callHeader, tracer);
+            return scope.TransactionProcessor.CallAndRestore(transaction, new(callHeader), tracer);
         }
 
         public ulong GetChainId()
         {
-            return _processingEnv.BlockTree.ChainId;
-        }
-        
-        private UInt256 GetNonce(Keccak stateRoot, Address address)
-        {
-            return _processingEnv.StateReader.GetNonce(stateRoot, address);
+            return _blockTree.ChainId;
         }
 
-        public ulong GetNetworkId() => _processingEnv.BlockTree.ChainId;
+        private UInt256 GetNonce(Hash256 stateRoot, Address address)
+        {
+            return _stateReader.GetNonce(stateRoot, address);
+        }
+
         public bool FilterExists(int filterId) => _filterStore.FilterExists(filterId);
         public FilterType GetFilterType(int filterId) => _filterStore.GetFilterType(filterId);
         public FilterLog[] GetFilterLogs(int filterId) => _filterManager.GetLogs(filterId);
 
         public IEnumerable<FilterLog> GetLogs(
-            BlockParameter fromBlock, 
-            BlockParameter toBlock, 
+            BlockParameter fromBlock,
+            BlockParameter toBlock,
             object? address = null,
-            IEnumerable<object>? topics = null, 
+            IEnumerable<object>? topics = null,
             CancellationToken cancellationToken = default)
         {
-            LogFilter filter = _filterStore.CreateLogFilter(fromBlock, toBlock, address, topics, false);
+            LogFilter filter = GetFilter(fromBlock, toBlock, address, topics);
             return _logFinder.FindLogs(filter, cancellationToken);
         }
 
-        public int NewFilter(BlockParameter fromBlock, BlockParameter toBlock,
+        public LogFilter GetFilter(
+            BlockParameter fromBlock,
+            BlockParameter toBlock,
+            object? address = null,
+            IEnumerable<object>? topics = null)
+        {
+            return _filterStore.CreateLogFilter(fromBlock, toBlock, address, topics, false);
+        }
+
+        public IEnumerable<FilterLog> GetLogs(
+            LogFilter filter,
+            BlockHeader fromBlock,
+            BlockHeader toBlock,
+            CancellationToken cancellationToken = default)
+        {
+            return _logFinder.FindLogs(filter, fromBlock, toBlock, cancellationToken);
+        }
+
+        public bool TryGetLogs(int filterId, out IEnumerable<FilterLog> filterLogs, CancellationToken cancellationToken = default)
+        {
+            LogFilter? filter;
+            filterLogs = null;
+            if ((filter = _filterStore.GetFilter<LogFilter>(filterId)) is not null)
+                filterLogs = _logFinder.FindLogs(filter, cancellationToken);
+
+            return filter is not null;
+        }
+
+        public int NewFilter(BlockParameter? fromBlock, BlockParameter? toBlock,
             object? address = null, IEnumerable<object>? topics = null)
         {
-            LogFilter filter = _filterStore.CreateLogFilter(fromBlock, toBlock, address, topics);
+            LogFilter filter = _filterStore.CreateLogFilter(fromBlock ?? BlockParameter.Latest, toBlock ?? BlockParameter.Latest, address, topics);
             _filterStore.SaveFilter(filter);
             return filter.Id;
         }
 
         public int NewBlockFilter()
         {
-            BlockFilter filter = _filterStore.CreateBlockFilter(_processingEnv.BlockTree.Head!.Number);
+            BlockFilter filter = _filterStore.CreateBlockFilter(_blockTree.Head!.Number);
             _filterStore.SaveFilter(filter);
             return filter.Id;
         }
-        
+
         public int NewPendingTransactionFilter()
         {
             PendingTransactionFilter filter = _filterStore.CreatePendingTransactionFilter();
@@ -320,31 +374,48 @@ namespace Nethermind.Facade
 
         public void UninstallFilter(int filterId) => _filterStore.RemoveFilter(filterId);
         public FilterLog[] GetLogFilterChanges(int filterId) => _filterManager.PollLogs(filterId);
-        public Keccak[] GetBlockFilterChanges(int filterId) => _filterManager.PollBlockHashes(filterId);
+        public Hash256[] GetBlockFilterChanges(int filterId) => _filterManager.PollBlockHashes(filterId);
 
         public void RecoverTxSenders(Block block)
         {
-            for (int i = 0; i < block.Transactions.Length; i++)
+            TxReceipt[] receipts = _receiptFinder.Get(block);
+            if (block.Transactions.Length == receipts.Length)
             {
-                Transaction transaction = block.Transactions[i];
-                if (transaction.SenderAddress == null)
+                for (int i = 0; i < block.Transactions.Length; i++)
                 {
-                    RecoverTxSender(transaction);
+                    Transaction transaction = block.Transactions[i];
+                    TxReceipt receipt = receipts[i];
+                    transaction.SenderAddress ??= receipt.Sender ?? RecoverTxSender(transaction);
+                }
+            }
+            else
+            {
+                for (int i = 0; i < block.Transactions.Length; i++)
+                {
+                    Transaction transaction = block.Transactions[i];
+                    transaction.SenderAddress ??= RecoverTxSender(transaction);
                 }
             }
         }
 
-        public Keccak[] GetPendingTransactionFilterChanges(int filterId) =>
+        public Hash256[] GetPendingTransactionFilterChanges(int filterId) =>
             _filterManager.PollPendingTransactionHashes(filterId);
 
-        public void RecoverTxSender(Transaction tx)
+        public Address? RecoverTxSender(Transaction tx) => _ecdsa.RecoverAddress(tx);
+
+        public void RunTreeVisitor(ITreeVisitor treeVisitor, Hash256 stateRoot)
         {
-            tx.SenderAddress = _ecdsa.RecoverAddress(tx);
+            _stateReader.RunTreeVisitor(treeVisitor, stateRoot);
         }
 
-        public void RunTreeVisitor(ITreeVisitor treeVisitor, Keccak stateRoot)
+        public bool HasStateForRoot(Hash256 stateRoot)
         {
-            _processingEnv.StateReader.RunTreeVisitor(treeVisitor, stateRoot);
+            return _stateReader.HasStateForRoot(stateRoot);
+        }
+
+        public IEnumerable<FilterLog> FindLogs(LogFilter filter, BlockHeader fromBlock, BlockHeader toBlock, CancellationToken cancellationToken = default)
+        {
+            return _logFinder.FindLogs(filter, fromBlock, toBlock, cancellationToken);
         }
 
         public IEnumerable<FilterLog> FindLogs(LogFilter filter, CancellationToken cancellationToken = default)

@@ -1,31 +1,22 @@
-//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
-using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+using System.Threading;
 using FluentAssertions;
+using Nethermind.Blockchain;
+using Nethermind.Blockchain.Receipts;
 using Nethermind.Blockchain.Synchronization;
 using Nethermind.Core;
+using Nethermind.Db;
 using Nethermind.Int256;
 using Nethermind.Logging;
+using Nethermind.Specs;
+using Nethermind.Synchronization.FastBlocks;
 using Nethermind.Synchronization.ParallelSync;
 using Nethermind.Synchronization.Peers;
+using Nethermind.Synchronization.Reporting;
 using NSubstitute;
 using NUnit.Framework;
 
@@ -34,12 +25,8 @@ namespace Nethermind.Synchronization.Test.ParallelSync
     [Parallelizable(ParallelScope.All)]
     [TestFixture(false)]
     [TestFixture(true)]
-    public class MultiSyncModeSelectorFastSyncTests : MultiSyncModeSelectorTestsBase
+    public class MultiSyncModeSelectorFastSyncTests(bool needToWaitForHeaders) : MultiSyncModeSelectorTestsBase(needToWaitForHeaders)
     {
-        public MultiSyncModeSelectorFastSyncTests(bool needToWaitForHeaders) : base(needToWaitForHeaders)
-        {
-        }
-
         [Test]
         public void Genesis_network()
         {
@@ -94,6 +81,17 @@ namespace Nethermind.Synchronization.Test.ParallelSync
         }
 
         [Test]
+        public void Load_from_without_merge_sync_pivot_resolved()
+        {
+            Scenario.GoesLikeThis(_needToWaitForHeaders)
+                .WhenMergeSyncPivotNotResolvedYet()
+                .WhateverThePeerPoolLooks()
+                .WhenThisNodeIsLoadingBlocksFromDb()
+                .ThenInAnyFastSyncConfiguration()
+                .TheSyncModeShouldBe(SyncMode.DbLoad | SyncMode.UpdatingPivot);
+        }
+
+        [Test]
         public void Simple_archive()
         {
             Scenario.GoesLikeThis(_needToWaitForHeaders)
@@ -107,9 +105,29 @@ namespace Nethermind.Synchronization.Test.ParallelSync
         public void Simple_fast_sync()
         {
             Scenario.GoesLikeThis(_needToWaitForHeaders)
-                .IfThisNodeHasNeverSyncedBefore()
+                .IfThisNodeIsInTheMiddleOfFastSyncAndFastBlocks(FastBlocksState.FinishedHeaders)
                 .AndGoodPeersAreKnown()
-                .WhenFastSyncWithoutFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
+                .TheSyncModeShouldBe(SyncMode.FastSync);
+        }
+
+        [Test]
+        public void Simple_snap_sync()
+        {
+            Scenario.GoesLikeThis(_needToWaitForHeaders)
+                .IfThisNodeIsInTheMiddleOfFastSyncAndFastBlocks(FastBlocksState.FinishedHeaders)
+                .AndGoodPeersAreKnown()
+                .WhenSnapSyncIsConfigured()
+                .TheSyncModeShouldBe(SyncMode.FastSync);
+        }
+
+        [Test]
+        public void If_SnapSyncDisabled_RangesNotFinished_StateNodes()
+        {
+            Scenario.GoesLikeThis(_needToWaitForHeaders)
+                .IfThisNodeIsInTheMiddleOfFastSyncAndFastBlocks(FastBlocksState.FinishedHeaders)
+                .AndGoodPeersAreKnown()
+                .WhenSnapSyncIsConfigured()
                 .TheSyncModeShouldBe(SyncMode.FastSync);
         }
 
@@ -120,7 +138,18 @@ namespace Nethermind.Synchronization.Test.ParallelSync
             Scenario.GoesLikeThis(_needToWaitForHeaders)
                 .IfThisNodeHasNeverSyncedBefore()
                 .AndGoodPeersAreKnown()
-                .WhenFastSyncWithFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
+                .TheSyncModeShouldBe(SyncMode.FastHeaders);
+        }
+
+        [Test]
+        public void Simple_snap_sync_with_fast_blocks()
+        {
+            // note that before we download at least one header we cannot start fast sync
+            Scenario.GoesLikeThis(_needToWaitForHeaders)
+                .IfThisNodeHasNeverSyncedBefore()
+                .AndGoodPeersAreKnown()
+                .WhenSnapSyncIsConfigured()
                 .TheSyncModeShouldBe(SyncMode.FastHeaders);
         }
 
@@ -130,7 +159,7 @@ namespace Nethermind.Synchronization.Test.ParallelSync
             Scenario.GoesLikeThis(_needToWaitForHeaders)
                 .IfThisNodeIsInTheMiddleOfFastSyncAndFastBlocks()
                 .AndGoodPeersAreKnown()
-                .WhenFastSyncWithFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
                 .TheSyncModeShouldBe(GetExpectationsIfNeedToWaitForHeaders(SyncMode.FastHeaders | SyncMode.FastSync));
         }
 
@@ -140,7 +169,7 @@ namespace Nethermind.Synchronization.Test.ParallelSync
             Scenario.GoesLikeThis(_needToWaitForHeaders)
                 .IfThisNodeIsInTheMiddleOfFastSyncAndFastBlocks()
                 .AndPeersAreOnlyUsefulForFastBlocks()
-                .WhenFastSyncWithFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
                 .TheSyncModeShouldBe(SyncMode.FastHeaders);
         }
 
@@ -148,9 +177,9 @@ namespace Nethermind.Synchronization.Test.ParallelSync
         public void In_the_middle_of_fast_sync()
         {
             Scenario.GoesLikeThis(_needToWaitForHeaders)
-                .IfThisNodeIsInTheMiddleOfFastSyncAndFastBlocks()
+                .IfThisNodeIsInTheMiddleOfFastSyncAndFastBlocks(FastBlocksState.FinishedHeaders)
                 .AndGoodPeersAreKnown()
-                .WhenFastSyncWithoutFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
                 .TheSyncModeShouldBe(SyncMode.FastSync);
         }
 
@@ -158,9 +187,9 @@ namespace Nethermind.Synchronization.Test.ParallelSync
         public void In_the_middle_of_fast_sync_and_lesser_peers_are_known()
         {
             Scenario.GoesLikeThis(_needToWaitForHeaders)
-                .IfThisNodeIsInTheMiddleOfFastSyncAndFastBlocks()
+                .IfThisNodeIsInTheMiddleOfFastSyncAndFastBlocks(FastBlocksState.FinishedHeaders)
                 .AndPeersAreOnlyUsefulForFastBlocks()
-                .WhenFastSyncWithoutFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
                 .TheSyncModeShouldBe(SyncMode.None);
         }
 
@@ -170,7 +199,7 @@ namespace Nethermind.Synchronization.Test.ParallelSync
             Scenario.GoesLikeThis(_needToWaitForHeaders)
                 .IfThisNodeJustFinishedFastBlocksAndFastSync()
                 .AndPeersAreOnlyUsefulForFastBlocks()
-                .WhenFastSyncWithoutFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
                 .TheSyncModeShouldBe(SyncMode.None);
         }
 
@@ -181,7 +210,7 @@ namespace Nethermind.Synchronization.Test.ParallelSync
             Scenario.GoesLikeThis(_needToWaitForHeaders)
                 .IfThisNodeJustFinishedFastBlocksAndFastSync(fastBlocksState)
                 .AndPeersAreOnlyUsefulForFastBlocks()
-                .WhenFastSyncWithFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
                 .TheSyncModeShouldBe(fastBlocksState.GetSyncMode());
         }
 
@@ -191,7 +220,48 @@ namespace Nethermind.Synchronization.Test.ParallelSync
             Scenario.GoesLikeThis(_needToWaitForHeaders)
                 .IfThisNodeJustFinishedFastBlocksAndFastSync()
                 .AndGoodPeersAreKnown()
-                .WhenFastSyncWithFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
+                .TheSyncModeShouldBe(SyncMode.StateNodes);
+        }
+
+        [Test]
+        public void Finished_fast_sync_but_not_snap_ranges()
+        {
+            Scenario.GoesLikeThis(_needToWaitForHeaders)
+                .IfThisNodeJustFinishedFastBlocksAndFastSync()
+                .AndGoodPeersAreKnown()
+                .WhenSnapSyncIsConfigured()
+                .TheSyncModeShouldBe(SyncMode.SnapSync);
+        }
+
+        [Test]
+        public void Finished_fast_sync_but_not_snap_ranges_IsFarFromHead()
+        {
+            Scenario.GoesLikeThis(_needToWaitForHeaders)
+                .IfThisNodeJustFinishedFastBlocksAndFastSync(bestHeader: Scenario.ChainHead.Number - 1000)
+                .AndGoodPeersAreKnown()
+                .WhenSnapSyncIsConfigured()
+                .WhenHeaderIsFarFromHead()
+                .TheSyncModeShouldBe(SyncMode.FastSync);
+        }
+
+        [Test]
+        public void Finished_fast_sync_and_snap_ranges()
+        {
+            Scenario.GoesLikeThis(_needToWaitForHeaders)
+                .IfThisNodeJustFinishedFastBlocksAndFastSync(snapRangesFinished: true)
+                .AndGoodPeersAreKnown()
+                .WhenSnapSyncIsConfigured()
+                .TheSyncModeShouldBe(SyncMode.StateNodes);
+        }
+
+        [Test]
+        public void Finished_fast_sync_via_fast_sync_lag_but_not_state_sync()
+        {
+            Scenario.GoesLikeThis(_needToWaitForHeaders)
+                .WhenBeaconProcessDestinationWithinFastSyncLag()
+                .AndGoodPeersAreKnown()
+                .WhenFastSyncIsConfigured()
                 .TheSyncModeShouldBe(SyncMode.StateNodes);
         }
 
@@ -201,8 +271,18 @@ namespace Nethermind.Synchronization.Test.ParallelSync
             Scenario.GoesLikeThis(_needToWaitForHeaders)
                 .ThisNodeFinishedFastSyncButNotFastBlocks()
                 .AndGoodPeersAreKnown()
-                .WhenFastSyncWithFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
                 .TheSyncModeShouldBe(GetExpectationsIfNeedToWaitForHeaders(SyncMode.StateNodes | SyncMode.FastHeaders));
+        }
+
+        [Test]
+        public void Finished_fast_sync_but_not_snap_sync_and_fast_blocks_in_progress()
+        {
+            Scenario.GoesLikeThis(_needToWaitForHeaders)
+                .ThisNodeFinishedFastSyncButNotFastBlocks()
+                .AndGoodPeersAreKnown()
+                .WhenSnapSyncIsConfigured()
+                .TheSyncModeShouldBe(GetExpectationsIfNeedToWaitForHeaders(SyncMode.SnapSync | SyncMode.FastHeaders));
         }
 
         [Test]
@@ -210,9 +290,39 @@ namespace Nethermind.Synchronization.Test.ParallelSync
         {
             Scenario.GoesLikeThis(_needToWaitForHeaders)
                 .ThisNodeFinishedFastSyncButNotFastBlocks()
-                .WhenFastSyncWithFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
                 .AndGoodPeersAreKnown()
                 .TheSyncModeShouldBe(GetExpectationsIfNeedToWaitForHeaders(SyncMode.StateNodes | SyncMode.FastHeaders));
+        }
+
+        [Test]
+        public void Finished_snap_node_but_not_fast_blocks()
+        {
+            Scenario.GoesLikeThis(_needToWaitForHeaders)
+                .ThisNodeFinishedFastSyncButNotFastBlocks()
+                .WhenSnapSyncIsConfigured()
+                .AndGoodPeersAreKnown()
+                .TheSyncModeShouldBe(GetExpectationsIfNeedToWaitForHeaders(SyncMode.SnapSync | SyncMode.FastHeaders));
+        }
+
+        [Test]
+        public void Finished_any_sync_before()
+        {
+            Scenario.GoesLikeThis(_needToWaitForHeaders)
+                .IfThisNodeJustFinishedStateSyncButNeedsToCatchUpToHeaders()
+                .WhenSnapSyncIsConfigured()
+                .AndGoodPeersAreKnown()
+                .TheSyncModeShouldBe(SyncMode.StateNodes);
+        }
+
+        [Test]
+        public void Finished_any_sync_far_time_ago()
+        {
+            Scenario.GoesLikeThis(_needToWaitForHeaders)
+                .IfThisNodeJustCameBackFromBeingOfflineForLongTimeAndFinishedFastSyncCatchUp()
+                .WhenSnapSyncIsConfigured()
+                .AndGoodPeersAreKnown()
+                .TheSyncModeShouldBe(SyncMode.StateNodes);
         }
 
         [TestCase(FastBlocksState.FinishedHeaders)]
@@ -222,7 +332,7 @@ namespace Nethermind.Synchronization.Test.ParallelSync
         {
             Scenario.GoesLikeThis(_needToWaitForHeaders)
                 .IfThisNodeJustFinishedStateSyncAndFastBlocks(fastBlocksState)
-                .WhenFastSyncWithFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
                 .AndGoodPeersAreKnown()
                 .TheSyncModeShouldBe(SyncMode.Full | fastBlocksState.GetSyncMode(true));
         }
@@ -234,7 +344,7 @@ namespace Nethermind.Synchronization.Test.ParallelSync
         {
             Scenario.GoesLikeThis(_needToWaitForHeaders)
                 .IfThisNodeFinishedStateSyncButNotFastBlocks(fastBlocksState)
-                .WhenFastSyncWithFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
                 .AndGoodPeersAreKnown()
                 .TheSyncModeShouldBe(GetExpectationsIfNeedToWaitForHeaders(SyncMode.Full | fastBlocksState.GetSyncMode(true)));
         }
@@ -244,7 +354,7 @@ namespace Nethermind.Synchronization.Test.ParallelSync
         {
             Scenario.GoesLikeThis(_needToWaitForHeaders)
                 .IfThisNodeIsFullySynced()
-                .WhenFastSyncWithFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
                 .AndDesirablePrePivotPeerIsKnown()
                 .TheSyncModeShouldBe(SyncMode.None);
         }
@@ -278,7 +388,7 @@ namespace Nethermind.Synchronization.Test.ParallelSync
             Scenario.GoesLikeThis(_needToWaitForHeaders)
                 .IfThisNodeJustStartedFullSyncProcessing(fastBlocksState)
                 .AndGoodPeersAreKnown()
-                .WhenFastSyncWithFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
                 .TheSyncModeShouldBe(GetExpectationsIfNeedToWaitForHeaders(SyncMode.Full | fastBlocksState.GetSyncMode(true)));
         }
 
@@ -328,7 +438,7 @@ namespace Nethermind.Synchronization.Test.ParallelSync
         {
             Scenario.GoesLikeThis(_needToWaitForHeaders)
                 .IfTheSyncProgressIsCorrupted()
-                .WhenFastSyncWithFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
                 .AndGoodPeersAreKnown()
                 .TheSyncModeShouldBe(SyncMode.WaitingForBlock);
         }
@@ -338,7 +448,7 @@ namespace Nethermind.Synchronization.Test.ParallelSync
         {
             Scenario.GoesLikeThis(_needToWaitForHeaders)
                 .IfThisNodeIsProcessingAlreadyDownloadedBlocksInFullSync()
-                .WhenFastSyncWithFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
                 .AndGoodPeersAreKnown()
                 .TheSyncModeShouldBe(SyncMode.WaitingForBlock);
         }
@@ -348,7 +458,7 @@ namespace Nethermind.Synchronization.Test.ParallelSync
         {
             Scenario.GoesLikeThis(_needToWaitForHeaders)
                 .IfThisNodeIsProcessingAlreadyDownloadedBlocksInFullSync()
-                .WhenFastSyncWithFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
                 .PeersFromDesirableBranchAreKnown()
                 .TheSyncModeShouldBe(SyncMode.Full);
         }
@@ -398,7 +508,7 @@ namespace Nethermind.Synchronization.Test.ParallelSync
         {
             Scenario.GoesLikeThis(_needToWaitForHeaders)
                 .IfThisNodeHasStateThatIsFarInThePast()
-                .WhenFastSyncWithFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
                 .AndGoodPeersAreKnown()
                 .TheSyncModeShouldBe(SyncMode.StateNodes);
         }
@@ -408,7 +518,7 @@ namespace Nethermind.Synchronization.Test.ParallelSync
         {
             Scenario.GoesLikeThis(_needToWaitForHeaders)
                 .IfThisNodeJustFinishedFastBlocksAndFastSync(FastBlocksState.FinishedHeaders)
-                .WhenFastSyncWithFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
                 .AndPeersMovedSlightlyForward()
                 .TheSyncModeShouldBe(GetExpectationsIfNeedToWaitForHeaders(SyncMode.StateNodes | SyncMode.FastSync));
         }
@@ -420,7 +530,7 @@ namespace Nethermind.Synchronization.Test.ParallelSync
             Scenario.GoesLikeThis(_needToWaitForHeaders)
                 .IfThisNodeJustFinishedFastBlocksAndFastSync(fastBlocksState)
                 .AndPeersMovedSlightlyForward()
-                .WhenFastSyncWithFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
                 .TheSyncModeShouldBe(GetExpectationsIfNeedToWaitForHeaders(SyncMode.StateNodes | SyncMode.FastSync | fastBlocksState.GetSyncMode()));
         }
 
@@ -429,7 +539,7 @@ namespace Nethermind.Synchronization.Test.ParallelSync
         {
             Scenario.GoesLikeThis(_needToWaitForHeaders)
                 .IfThisNodeJustFinishedStateSyncButNeedsToCatchUpToHeaders()
-                .WhenFastSyncWithFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
                 .AndGoodPeersAreKnown()
                 .TheSyncModeShouldBe(SyncMode.StateNodes);
         }
@@ -459,7 +569,7 @@ namespace Nethermind.Synchronization.Test.ParallelSync
         {
             Scenario.GoesLikeThis(_needToWaitForHeaders)
                 .IfThisNodeJustCameBackFromBeingOfflineForLongTimeAndFinishedFastSyncCatchUp()
-                .WhenFastSyncWithFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
                 .AndGoodPeersAreKnown()
                 .TheSyncModeShouldBe(SyncMode.StateNodes);
         }
@@ -470,8 +580,18 @@ namespace Nethermind.Synchronization.Test.ParallelSync
             Scenario.GoesLikeThis(_needToWaitForHeaders)
                 .IfPeersMovedForwardBeforeThisNodeProcessedFirstFullBlock()
                 .AndPeersMovedSlightlyForwardWithFastSyncLag()
-                .WhenFastSyncWithFastBlocksIsConfigured()
+                .When_FastSync_NoSnapSync_Configured()
                 .TheSyncModeShouldBe(GetExpectationsIfNeedToWaitForHeaders(SyncMode.Full | SyncMode.FastHeaders));
+        }
+
+        [Test]
+        public void When_state_sync_does_not_finished_then_sync_mode_should_not_be_full()
+        {
+            Scenario.GoesLikeThis(_needToWaitForHeaders)
+                .IfTheNodeDoesNotFinishStateSync()
+                .AndPeersMovedSlightlyForward()
+                .ThenInAnyFastSyncConfiguration()
+                .TheSyncModeShouldBe(SyncMode.StateNodes);
         }
 
         [Test]
@@ -497,16 +617,16 @@ namespace Nethermind.Synchronization.Test.ParallelSync
 
             syncPeers.Add(syncPeer);
             ISyncPeerPool syncPeerPool = Substitute.For<ISyncPeerPool>();
-            IEnumerable<PeerInfo> peerInfos = syncPeers.Select(p => new PeerInfo(p));
+            IEnumerable<PeerInfo> peerInfos = syncPeers.Select(p => new PeerInfo(p)).ToArray();
             syncPeerPool.InitializedPeers.Returns(peerInfos);
             syncPeerPool.AllPeers.Returns(peerInfos);
 
             ISyncConfig syncConfig = new SyncConfig() { FastSyncCatchUpHeightDelta = 2 };
             syncConfig.FastSync = true;
-            
-            TotalDifficultyBasedBetterPeerStrategy bestPeerStrategy = new(syncProgressResolver, LimboLogs.Instance);
+
+            TotalDifficultyBetterPeerStrategy bestPeerStrategy = new(LimboLogs.Instance);
             MultiSyncModeSelector selector = new(syncProgressResolver, syncPeerPool, syncConfig, No.BeaconSync, bestPeerStrategy, LimboLogs.Instance);
-            selector.DisableTimer();
+            selector.Stop();
             syncProgressResolver.FindBestProcessedBlock().Returns(Scenario.ChainHead.Number);
             selector.Update();
             selector.Current.Should().Be(SyncMode.Full);
@@ -515,7 +635,7 @@ namespace Nethermind.Synchronization.Test.ParallelSync
             {
                 long number = header.Number + i;
                 syncPeer.HeadNumber.Returns(number);
-                syncPeer.TotalDifficulty.Returns(header.TotalDifficulty.Value + i);
+                syncPeer.TotalDifficulty.Returns(header.TotalDifficulty!.Value + i);
                 syncProgressResolver.FindBestHeader().Returns(number);
                 syncProgressResolver.FindBestFullBlock().Returns(number);
                 selector.Update();
@@ -523,5 +643,76 @@ namespace Nethermind.Synchronization.Test.ParallelSync
 
             selector.Current.Should().Be(SyncMode.StateNodes);
         }
+
+        [Test]
+        public void Changed_event_no_longer_gets_blocked_when_invoking_delegates()
+        {
+            ISyncProgressResolver syncProgressResolver = Substitute.For<ISyncProgressResolver>();
+            syncProgressResolver.FindBestHeader().Returns(Scenario.ChainHead.Number);
+            syncProgressResolver.FindBestFullBlock().Returns(Scenario.ChainHead.Number);
+            syncProgressResolver.FindBestFullState().Returns(Scenario.ChainHead.Number - MultiSyncModeSelector.FastSyncLag);
+            syncProgressResolver.FindBestProcessedBlock().Returns(0);
+            syncProgressResolver.IsFastBlocksFinished().Returns(FastBlocksState.FinishedReceipts);
+            syncProgressResolver.ChainDifficulty.Returns(UInt256.Zero);
+
+            List<ISyncPeer> syncPeers = new();
+
+            BlockHeader header = Scenario.ChainHead;
+            ISyncPeer syncPeer = Substitute.For<ISyncPeer>();
+            syncPeer.HeadHash.Returns(header.Hash);
+            syncPeer.HeadNumber.Returns(header.Number);
+            syncPeer.TotalDifficulty.Returns(header.TotalDifficulty ?? 0);
+            syncPeer.IsInitialized.Returns(true);
+            syncPeer.ClientId.Returns("nethermind");
+
+            syncPeers.Add(syncPeer);
+            ISyncPeerPool syncPeerPool = Substitute.For<ISyncPeerPool>();
+            IEnumerable<PeerInfo> peerInfos = syncPeers.Select(p => new PeerInfo(p)).ToArray();
+            syncPeerPool.InitializedPeers.Returns(peerInfos);
+            syncPeerPool.AllPeers.Returns(peerInfos);
+
+            ISyncConfig syncConfig = new SyncConfig
+            {
+                FastSyncCatchUpHeightDelta = 2,
+                FastSync = true,
+            };
+
+            TotalDifficultyBetterPeerStrategy bestPeerStrategy = new(LimboLogs.Instance);
+            MultiSyncModeSelector selector = new(syncProgressResolver, syncPeerPool, syncConfig, No.BeaconSync, bestPeerStrategy, LimboLogs.Instance);
+            selector.Stop();
+            syncProgressResolver.FindBestProcessedBlock().Returns(Scenario.ChainHead.Number);
+            selector.Update();
+            selector.Current.Should().Be(SyncMode.Full);
+
+            CancellationTokenSource waitTokenSource = new();
+            ReceiptsSyncFeed receiptsSyncFeed = Substitute.ForPartsOf<ReceiptsSyncFeed>(MainnetSpecProvider.Instance, Substitute.For<IBlockTree>(), Substitute.For<IReceiptStorage>(), syncPeerPool, syncConfig, Substitute.For<ISyncReport>(), Substitute.For<IDb>(), LimboLogs.Instance);
+            receiptsSyncFeed.When(rsf => rsf.InitializeFeed()).DoNotCallBase();
+            receiptsSyncFeed.When(rsf => rsf.InitializeFeed()).Do(e =>
+            {
+                waitTokenSource.Token.WaitHandle.WaitOne(1000);
+                if (!waitTokenSource.IsCancellationRequested)
+                    Assert.Fail();
+            });
+            selector.Changed += (sender, args) =>
+            {
+                receiptsSyncFeed?.SyncModeSelectorOnChanged(SyncMode.FastReceipts);
+            };
+            selector.Changed += SecondDelegate;
+
+            for (uint i = 0; i < syncConfig.FastSyncCatchUpHeightDelta + 1; i++)
+            {
+                long number = header.Number + i;
+                syncPeer.HeadNumber.Returns(number);
+                syncPeer.TotalDifficulty.Returns(header.TotalDifficulty!.Value + i);
+                syncProgressResolver.FindBestHeader().Returns(number);
+                syncProgressResolver.FindBestFullBlock().Returns(number);
+                selector.Update();
+            }
+            void SecondDelegate(object? sender, SyncModeChangedEventArgs e)
+            {
+                waitTokenSource.Cancel();
+            }
+        }
+
     }
 }

@@ -1,23 +1,10 @@
-﻿//  Copyright (c) 2021 Demerzel Solutions Limited
-//  This file is part of the Nethermind library.
-// 
-//  The Nethermind library is free software: you can redistribute it and/or modify
-//  it under the terms of the GNU Lesser General Public License as published by
-//  the Free Software Foundation, either version 3 of the License, or
-//  (at your option) any later version.
-// 
-//  The Nethermind library is distributed in the hope that it will be useful,
-//  but WITHOUT ANY WARRANTY; without even the implied warranty of
-//  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
-//  GNU Lesser General Public License for more details.
-// 
-//  You should have received a copy of the GNU Lesser General Public License
-//  along with the Nethermind. If not, see <http://www.gnu.org/licenses/>.
-// 
+// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-License-Identifier: LGPL-3.0-only
 
 using Nethermind.Blockchain;
 using Nethermind.Blockchain.Find;
 using Nethermind.Consensus;
+using Nethermind.Consensus.Messages;
 using Nethermind.Consensus.Validators;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
@@ -31,12 +18,15 @@ namespace Nethermind.Merge.Plugin
     {
         // https://eips.ethereum.org/EIPS/eip-3675#constants
         private const int MaxExtraDataBytes = 32;
-        
+
         private readonly IPoSSwitcher _poSSwitcher;
+        private readonly IHeaderValidator _preMergeHeaderValidator;
         private readonly IBlockTree _blockTree;
+        private readonly ISpecProvider _specProvider;
 
         public MergeHeaderValidator(
             IPoSSwitcher poSSwitcher,
+            IHeaderValidator preMergeHeaderValidator,
             IBlockTree blockTree,
             ISpecProvider specProvider,
             ISealValidator sealValidator,
@@ -44,81 +34,96 @@ namespace Nethermind.Merge.Plugin
             : base(blockTree, sealValidator, specProvider, logManager)
         {
             _poSSwitcher = poSSwitcher;
+            _preMergeHeaderValidator = preMergeHeaderValidator;
             _blockTree = blockTree;
+            _specProvider = specProvider;
         }
-        
+
         public override bool Validate(BlockHeader header, BlockHeader? parent, bool isUncle = false)
         {
-            bool theMergeValid = ValidateTheMergeChecks(header);
-            return base.Validate(header, parent, isUncle) && theMergeValid;
+            return Validate(header, parent, isUncle, out _);
+        }
+        public override bool Validate(BlockHeader header, BlockHeader? parent, bool isUncle, out string? error)
+        {
+            error = null;
+            return _poSSwitcher.IsPostMerge(header)
+                ? ValidateTheMergeChecks(header) && base.Validate(header, parent, isUncle, out error)
+                : ValidatePoWTotalDifficulty(header) && _preMergeHeaderValidator.Validate(header, parent, isUncle, out error);
         }
 
-        public override bool Validate(BlockHeader header, bool isUncle = false)
-        {
-            BlockHeader? parent = _blockTree.FindParentHeader(header, BlockTreeLookupOptions.None);
-            return Validate(header, parent, isUncle);
-        }
+        public override bool Validate(BlockHeader header, bool isUncle, out string? error) =>
+            Validate(header, _blockTree.FindParentHeader(header, BlockTreeLookupOptions.None), isUncle, out error);
 
-        protected override bool ValidateTotalDifficulty(BlockHeader parent, BlockHeader header)
+        public override bool Validate(BlockHeader header, bool isUncle = false) =>
+            Validate(header, _blockTree.FindParentHeader(header, BlockTreeLookupOptions.None), isUncle);
+
+        protected override bool ValidateTotalDifficulty(BlockHeader parent, BlockHeader header, ref string? error) =>
+            _poSSwitcher.IsPostMerge(header) || base.ValidateTotalDifficulty(parent, header, ref error);
+
+        private bool ValidatePoWTotalDifficulty(BlockHeader header)
         {
-            return _poSSwitcher.IsPostMerge(header) || base.ValidateTotalDifficulty(parent, header);
-        }
-        private bool ValidateTheMergeChecks(BlockHeader header)
-        {
-            bool validDifficulty = true, validNonce = true, validUncles = true;
-            (bool IsTerminal, bool IsPostMerge) switchInfo = _poSSwitcher.GetBlockConsensusInfo(header);
-            bool terminalTotalDifficultyChecks = ValidateTerminalTotalDifficultyChecks(header, switchInfo.IsTerminal);
-            if (switchInfo.IsPostMerge)
+            if (header.Difficulty == 0)
             {
-                validDifficulty =
-                    ValidateHeaderField(header, header.Difficulty, UInt256.Zero, nameof(header.Difficulty));
-                validNonce = ValidateHeaderField(header, header.Nonce, 0u, nameof(header.Nonce));
-                validUncles = ValidateHeaderField(header, header.UnclesHash, Keccak.OfAnEmptySequenceRlp,
-                    nameof(header.UnclesHash));
+                if (_logger.IsWarn) _logger.Warn($"Invalid block header {header.ToString(BlockHeader.Format.Short)} - zero difficulty for PoW block.");
+                return false;
             }
 
-            return terminalTotalDifficultyChecks
-                   && validDifficulty
-                   && validNonce
-                   && validUncles;
+            return true;
         }
-        
-        protected override bool ValidateExtraData(BlockHeader header, BlockHeader? parent, IReleaseSpec spec, bool isUncle = false)
+
+        private bool ValidateTheMergeChecks(BlockHeader header)
+        {
+            (bool IsTerminal, bool IsPostMerge) switchInfo = _poSSwitcher.GetBlockConsensusInfo(header);
+            bool terminalTotalDifficultyChecks = ValidateTerminalTotalDifficultyChecks(header, switchInfo.IsTerminal);
+            bool valid = !switchInfo.IsPostMerge ||
+                        ValidateHeaderField(header, header.Difficulty, UInt256.Zero, nameof(header.Difficulty))
+                        && ValidateHeaderField(header, header.Nonce, 0u, nameof(header.Nonce))
+                        && ValidateHeaderField(header, header.UnclesHash, Keccak.OfAnEmptySequenceRlp, nameof(header.UnclesHash));
+
+            return terminalTotalDifficultyChecks && valid;
+        }
+
+        protected override bool ValidateExtraData(BlockHeader header, BlockHeader? parent, IReleaseSpec spec, bool isUncle, ref string? error)
         {
             if (_poSSwitcher.IsPostMerge(header))
             {
-                if (header.ExtraData.Length <= MaxExtraDataBytes) return true;
-                if (_logger.IsWarn)
-                    _logger.Warn(
-                        $"Invalid block header {header.ToString(BlockHeader.Format.Short)} - the {nameof(header.MixHash)} exceeded max length of {MaxExtraDataBytes}.");
-                return false;
+                if (header.ExtraData.Length > MaxExtraDataBytes)
+                {
+                    if (_logger.IsWarn) _logger.Warn($"Invalid block header {header.ToString(BlockHeader.Format.Short)} - the {nameof(header.ExtraData)} exceeded max length of {MaxExtraDataBytes}.");
+                    error = BlockErrorMessages.InvalidExtraData;
+                    return false;
+                }
+
+                return true;
             }
-            return base.ValidateExtraData(header, parent, spec, isUncle);
+
+            return base.ValidateExtraData(header, parent, spec, isUncle, ref error);
         }
 
         private bool ValidateTerminalTotalDifficultyChecks(BlockHeader header, bool isTerminal)
         {
-            if (header.TotalDifficulty == null || header.TotalDifficulty == 0 || _poSSwitcher.TerminalTotalDifficulty == null)
+            if ((header.TotalDifficulty ?? 0) == 0 || _poSSwitcher.TerminalTotalDifficulty is null)
+            {
                 return true;
+            }
 
             bool isValid = true;
             bool isPostMerge = header.IsPostMerge;
-            if (isPostMerge == false && isTerminal == false)
+            if (!isPostMerge && !isTerminal)
             {
                 if (header.TotalDifficulty >= _poSSwitcher.TerminalTotalDifficulty)
+                {
                     isValid = false;
+                }
             }
-            else
+            else if (header.TotalDifficulty < _poSSwitcher.TerminalTotalDifficulty)
             {
-                if (header.TotalDifficulty < _poSSwitcher.TerminalTotalDifficulty)
-                    isValid = false;
+                isValid = false;
             }
 
-            if (isValid == false)
+            if (!isValid)
             {
-                if (_logger.IsWarn)
-                    _logger.Warn(
-                        $"Invalid block header {header.ToString(BlockHeader.Format.Short)} - total difficulty is incorrect because of TTD, TerminalTotalDifficulty: {_poSSwitcher.TerminalTotalDifficulty}, IsPostMerge {header.IsPostMerge} IsTerminalBlock: {isTerminal}");
+                if (_logger.IsWarn) _logger.Warn($"Invalid block header {header.ToString(BlockHeader.Format.Short)} - total difficulty is incorrect because of TTD, TerminalTotalDifficulty: {_poSSwitcher.TerminalTotalDifficulty}, IsPostMerge {header.IsPostMerge} IsTerminalBlock: {isTerminal}");
             }
 
             return isValid;
@@ -126,11 +131,13 @@ namespace Nethermind.Merge.Plugin
 
         private bool ValidateHeaderField<T>(BlockHeader header, T value, T expected, string name)
         {
-            if (Equals(value, expected)) return true;
-            if (_logger.IsWarn)
-                _logger.Warn(
-                    $"Invalid block header {header.ToString(BlockHeader.Format.Short)} - the {name} is incorrect expected {expected}, got {value} .");
-            return false;
+            if (!Equals(value, expected))
+            {
+                if (_logger.IsWarn) _logger.Warn($"Invalid block header {header.ToString(BlockHeader.Format.Full)} - the {name} is incorrect expected {expected}, got {value}. TransitionFinished: {_poSSwitcher.TransitionFinished}, TTD: {_specProvider.TerminalTotalDifficulty}, IsTerminal: {header.IsTerminalBlock(_specProvider)}");
+                return false;
+            }
+
+            return true;
         }
     }
 }
