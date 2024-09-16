@@ -68,7 +68,7 @@ namespace Nethermind.Benchmark.Runner
             var executionTime = report.ResultStatistics?.Mean;
             var memAllocPerOp = report.GcStats.GetBytesAllocatedPerOperation(report.BenchmarkCase);
 
-            Console.WriteLine($"{executionTime},{report.ResultStatistics.StandardDeviation},{report.GcStats.TotalOperations},{memAllocPerOp}");
+            Console.WriteLine($"{executionTime},{report.ResultStatistics?.N},{report.ResultStatistics?.StandardDeviation},{report.GcStats.TotalOperations},{memAllocPerOp}");
         }
 
         static void RunFullBenchmark(string[] args)
