@@ -18,6 +18,7 @@ using Nethermind.Trie.Pruning;
 using Nethermind.Evm;
 using Ethereum.Test.Base;
 using static Nethermind.Evm.VirtualMachine;
+using NSubstitute.Routing.AutoValues;
 
 
 namespace Nethermind.Benchmark.Runner;
@@ -46,7 +47,8 @@ public class BytecodeBenchmark
 
         CodeInfoRepository codeInfoRepository = new();
 
-        _virtualMachine = new VirtualMachine(_blockhashProvider, MainnetSpecProvider.Instance, codeInfoRepository, LimboLogs.Instance);
+        var specProvider = new TestSpecProvider(_spec);
+        _virtualMachine = new VirtualMachine(_blockhashProvider, specProvider, codeInfoRepository, LimboLogs.Instance);
     }
 
     [IterationSetup]
