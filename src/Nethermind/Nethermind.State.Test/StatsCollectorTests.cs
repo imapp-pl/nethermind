@@ -1,7 +1,6 @@
 // SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
-using System;
 using FluentAssertions;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
@@ -27,7 +26,7 @@ namespace Nethermind.Store.Test
             MemDb codeDb = new();
             MemDb stateDb = new MemDb();
             NodeStorage nodeStorage = new NodeStorage(stateDb);
-            TrieStore trieStore = new(nodeStorage, new MemoryLimit(0.MB()), Persist.EveryBlock, LimboLogs.Instance);
+            TrieStore trieStore = new(nodeStorage, new MemoryLimit(0.MB()), Persist.EveryBlock, new PruningConfig(), LimboLogs.Instance);
             WorldState stateProvider = new(trieStore, codeDb, LimboLogs.Instance);
 
             stateProvider.CreateAccount(TestItem.AddressA, 1);

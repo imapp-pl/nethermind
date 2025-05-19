@@ -2,11 +2,11 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
-using System.Collections;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq.Expressions;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 
 namespace Nethermind.Core.Collections
 {
@@ -16,13 +16,49 @@ namespace Nethermind.Core.Collections
 
         public static void AddRange<T>(this ICollection<T> list, IEnumerable<T> items)
         {
-            foreach (T item in items)
+            if (items is T[] array)
             {
-                list.Add(item);
+                list.AddRange(array);
+            }
+            else if (items is IList<T> listItems)
+            {
+                list.AddRange(listItems);
+            }
+            else if (items is IReadOnlyList<T> readOnlyList)
+            {
+                list.AddRange(readOnlyList);
+            }
+            else
+            {
+                foreach (T item in items)
+                {
+                    list.Add(item);
+                }
             }
         }
 
-        public static void AddRange<T>(this ICollection<T> list, params T[] items)
+        [OverloadResolutionPriority(2)]
+        public static void AddRange<T>(this ICollection<T> list, IList<T> items)
+        {
+            int count = items.Count;
+            for (int index = 0; index < count; index++)
+            {
+                list.Add(items[index]);
+            }
+        }
+
+        [OverloadResolutionPriority(1)]
+        public static void AddRange<T>(this ICollection<T> list, IReadOnlyList<T> items)
+        {
+            int count = items.Count;
+            for (int index = 0; index < count; index++)
+            {
+                list.Add(items[index]);
+            }
+        }
+
+        [OverloadResolutionPriority(3)]
+        public static void AddRange<T>(this ICollection<T> list, T[] items)
         {
             for (int index = 0; index < items.Length; index++)
             {
@@ -33,12 +69,19 @@ namespace Nethermind.Core.Collections
         public static bool NoResizeClear<TKey, TValue>(this ConcurrentDictionary<TKey, TValue>? dictionary)
                 where TKey : notnull
         {
-            if (dictionary is null || dictionary.IsEmpty)
+            if (dictionary?.IsEmpty ?? true)
             {
                 return false;
             }
 
             using var handle = dictionary.AcquireLock();
+
+            // Recheck under lock, so not to over clear which is expensive.
+            // May have cleared while waiting for lock.
+            if (dictionary.IsEmpty)
+            {
+                return false;
+            }
 
             ClearCache<TKey, TValue>.Clear(dictionary);
             return true;

@@ -12,17 +12,24 @@ namespace Nethermind.TxPool
 {
     public class NullTxPool : ITxPool
     {
+        public bool SupportsBlobs => false;
         private NullTxPool() { }
 
         public static NullTxPool Instance { get; } = new();
 
+        public event EventHandler<Block>? TxPoolHeadChanged
+        {
+            add { }
+            remove { }
+        }
+
         public int GetPendingTransactionsCount() => 0;
         public int GetPendingBlobTransactionsCount() => 0;
-        public Transaction[] GetPendingTransactions() => Array.Empty<Transaction>();
+        public Transaction[] GetPendingTransactions() => [];
 
-        public Transaction[] GetPendingTransactionsBySender(Address address) => Array.Empty<Transaction>();
+        public Transaction[] GetPendingTransactionsBySender(Address address) => [];
 
-        public IDictionary<AddressAsKey, Transaction[]> GetPendingTransactionsBySender()
+        public IDictionary<AddressAsKey, Transaction[]> GetPendingTransactionsBySender(bool filterToReadyTx = false, UInt256 baseFee = default)
             => new Dictionary<AddressAsKey, Transaction[]>();
 
         public IDictionary<AddressAsKey, Transaction[]> GetPendingLightBlobTransactionsBySender()
@@ -91,5 +98,6 @@ namespace Nethermind.TxPool
             add { }
             remove { }
         }
+        public bool AcceptTxWhenNotSynced { get; set; }
     }
 }

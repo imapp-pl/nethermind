@@ -4,6 +4,7 @@
 using System;
 using NonBlocking;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -121,9 +122,9 @@ namespace Nethermind.Synchronization.Peers
         // map from AllocationContexts single flag to index in array of _weaknesses
         private static readonly IDictionary<AllocationContexts, int> AllocationIndexes =
             FastEnum.GetValues<AllocationContexts>()
-            .Where(c => c != AllocationContexts.All && c != AllocationContexts.None)
-            .Select((a, i) => (a, i))
-            .ToDictionary(v => v.a, v => v.i);
+            .Where(static c => c != AllocationContexts.All && c != AllocationContexts.None)
+            .Select(static (a, i) => (a, i))
+            .ToDictionary(static v => v.a, static v => v.i);
 
         private readonly int[] _weaknesses = new int[AllocationIndexes.Count];
 
@@ -155,7 +156,15 @@ namespace Nethermind.Synchronization.Peers
 
         private static string BuildContextString(AllocationContexts contexts)
         {
-            return $"{((contexts & AllocationContexts.Headers) == AllocationContexts.Headers ? "H" : " ")}{((contexts & AllocationContexts.Bodies) == AllocationContexts.Bodies ? "B" : " ")}{((contexts & AllocationContexts.Receipts) == AllocationContexts.Receipts ? "R" : " ")}{((contexts & AllocationContexts.State) == AllocationContexts.State ? "N" : " ")}{((contexts & AllocationContexts.Snap) == AllocationContexts.Snap ? "S" : " ")}";
+            return $"{((contexts & AllocationContexts.Headers) == AllocationContexts.Headers ? "H" : " ")}{((contexts & AllocationContexts.Bodies) == AllocationContexts.Bodies ? "B" : " ")}{((contexts & AllocationContexts.Receipts) == AllocationContexts.Receipts ? "R" : " ")}{((contexts & AllocationContexts.State) == AllocationContexts.State ? "N" : " ")}{((contexts & AllocationContexts.Snap) == AllocationContexts.Snap ? "S" : " ")}{((contexts & AllocationContexts.ForwardHeader) == AllocationContexts.ForwardHeader ? "F" : " ")}";
+        }
+
+        public void EnsureInitialized()
+        {
+            if (!IsInitialized)
+            {
+                throw new InvalidAsynchronousStateException($"{GetType().Name} found an uninitialized peer - {this}");
+            }
         }
 
         public override string ToString() => $"[{BuildContextString(AllocatedContexts)} ][{BuildContextString(SleepingContexts)} ]{SyncPeer}";

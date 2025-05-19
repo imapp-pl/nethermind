@@ -3,8 +3,6 @@
 
 using System;
 using System.Collections.Generic;
-using System.Reflection;
-using System.Text.Json.Serialization;
 using System.Threading.Tasks;
 
 using Nethermind.Serialization.Json;
@@ -44,6 +42,6 @@ namespace Nethermind.JsonRpc.Modules
 
         public void Return(string methodName, IRpcModule rpcModule) { }
 
-        public IRpcModulePool? GetPool(string moduleType) => null;
+        public IRpcModulePool? GetPoolForMethod(string moduleType) => null;
     }
 }

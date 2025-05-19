@@ -4,19 +4,20 @@
 using System;
 using System.Collections.Generic;
 using Nethermind.Blockchain;
+using Nethermind.Consensus.AuRa.Config;
 using Nethermind.Consensus.AuRa.Validators;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
+using Nethermind.Core.Threading;
 using Nethermind.Crypto;
 using Nethermind.Logging;
 using Nethermind.Serialization.Rlp;
-using Nethermind.Specs.ChainSpecStyle;
 
 namespace Nethermind.Consensus.AuRa
 {
     public class AuRaSealValidator : ISealValidator
     {
-        private readonly AuRaParameters _parameters;
+        private readonly AuRaChainSpecEngineParameters _parameters;
         private readonly IAuRaStepCalculator _stepCalculator;
         private readonly IBlockTree _blockTree;
         private readonly IValidatorStore _validatorStore;
@@ -25,7 +26,7 @@ namespace Nethermind.Consensus.AuRa
         private readonly ILogger _logger;
         private readonly ReceivedSteps _receivedSteps = new ReceivedSteps();
 
-        public AuRaSealValidator(AuRaParameters parameters, IAuRaStepCalculator stepCalculator, IBlockTree blockTree, IValidatorStore validatorStore, IValidSealerStrategy validSealerStrategy, IEthereumEcdsa ecdsa, ILogManager logManager)
+        public AuRaSealValidator(AuRaChainSpecEngineParameters parameters, IAuRaStepCalculator stepCalculator, IBlockTree blockTree, IValidatorStore validatorStore, IValidSealerStrategy validSealerStrategy, IEthereumEcdsa ecdsa, ILogManager logManager)
         {
             _parameters = parameters ?? throw new ArgumentNullException(nameof(parameters));
             _stepCalculator = stepCalculator ?? throw new ArgumentNullException(nameof(stepCalculator));
@@ -61,13 +62,13 @@ namespace Nethermind.Consensus.AuRa
                 if (step == parent.AuRaStep)
                 {
                     if (_logger.IsWarn) _logger.Warn($"Multiple blocks proposed for step {step}. Block {header.Number}, hash {header.Hash} is duplicate.");
-                    ReportingValidator.ReportMalicious(header.Beneficiary, header.Number, Array.Empty<byte>(), IReportingValidator.MaliciousCause.DuplicateStep);
+                    ReportingValidator.ReportMalicious(header.Beneficiary, header.Number, [], IReportingValidator.MaliciousCause.DuplicateStep);
                     return false;
                 }
                 else if (step < parent.AuRaStep && header.Number >= _parameters.ValidateStepTransition)
                 {
                     if (_logger.IsError) _logger.Error($"Block {header.Number}, hash {header.Hash} step {step} is lesser than parents step {parent.AuRaStep}.");
-                    ReportingValidator.ReportMalicious(header.Beneficiary, header.Number, Array.Empty<byte>(), IReportingValidator.MaliciousCause.DuplicateStep);
+                    ReportingValidator.ReportMalicious(header.Beneficiary, header.Number, [], IReportingValidator.MaliciousCause.DuplicateStep);
                     return false;
                 }
 
@@ -110,7 +111,7 @@ namespace Nethermind.Consensus.AuRa
                 if (_receivedSteps.ContainsSiblingOrInsert(header, _validatorStore.GetValidators().Length))
                 {
                     if (_logger.IsDebug) _logger.Debug($"Validator {header.Beneficiary} produced sibling blocks in the same step {step} in block {header.Number}.");
-                    ReportingValidator.ReportMalicious(header.Beneficiary, header.Number, Array.Empty<byte>(), IReportingValidator.MaliciousCause.SiblingBlocksInSameStep);
+                    ReportingValidator.ReportMalicious(header.Beneficiary, header.Number, [], IReportingValidator.MaliciousCause.SiblingBlocksInSameStep);
                 }
 
                 if (header.Number >= _parameters.ValidateScoreTransition)
@@ -160,6 +161,8 @@ namespace Nethermind.Consensus.AuRa
 
         private class ReceivedSteps
         {
+            private McsLock _lock = new McsLock();
+
             private readonly struct AuthorBlock : IEquatable<AuthorBlock>
             {
                 public AuthorBlock(Address author, Hash256 block)
@@ -208,6 +211,8 @@ namespace Nethermind.Consensus.AuRa
 
             public bool ContainsSiblingOrInsert(BlockHeader header, int validatorCount)
             {
+                using McsLock.Disposable _ = _lock.Acquire();
+
                 long step = header.AuRaStep.Value;
                 Address author = header.Beneficiary;
                 var hash = header.Hash;

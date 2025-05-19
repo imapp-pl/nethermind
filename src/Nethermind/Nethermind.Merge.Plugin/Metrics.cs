@@ -23,5 +23,21 @@ namespace Nethermind.Merge.Plugin
         [GaugeMetric]
         [Description("Number of Transactions included in the Last GetPayload Request")]
         public static int NumberOfTransactionsInGetPayload { get; set; }
+
+        [GaugeMetric]
+        [Description("Number of Blobs requested by engine_getBlobsV1")]
+        public static int NumberOfRequestedBlobs { get; set; }
+
+        [GaugeMetric]
+        [Description("Number of Blobs sent by engine_getBlobsV1")]
+        public static int NumberOfSentBlobs { get; set; }
+
+        [GaugeMetric]
+        [Description("Number of responses to engine_getBlobsV1 with all requested blobs")]
+        public static int GetBlobsRequestsSuccessTotal { get; set; }
+
+        [GaugeMetric]
+        [Description("Number of responses to engine_getBlobsV1 without all requested blobs")]
+        public static int GetBlobsRequestsFailureTotal { get; set; }
     }
 }

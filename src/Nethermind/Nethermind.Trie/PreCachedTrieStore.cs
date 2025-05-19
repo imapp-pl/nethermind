@@ -5,7 +5,6 @@ using System;
 using System.Collections.Concurrent;
 using System.Numerics;
 using Nethermind.Core;
-using Nethermind.Core.Collections;
 using Nethermind.Core.Crypto;
 using Nethermind.Trie.Pruning;
 
@@ -34,15 +33,14 @@ public class PreCachedTrieStore : ITrieStore
         _inner.Dispose();
     }
 
-    public void CommitNode(long blockNumber, Hash256? address, in NodeCommitInfo nodeCommitInfo, WriteFlags writeFlags = WriteFlags.None)
+    public ICommitter BeginCommit(Hash256? address, TrieNode? root, WriteFlags writeFlags)
     {
-        _inner.CommitNode(blockNumber, address, in nodeCommitInfo, writeFlags);
+        return _inner.BeginCommit(address, root, writeFlags);
     }
 
-    public void FinishBlockCommit(TrieType trieType, long blockNumber, Hash256? address, TrieNode? root, WriteFlags writeFlags = WriteFlags.None)
+    public IBlockCommitter BeginBlockCommit(long blockNumber)
     {
-        _inner.FinishBlockCommit(trieType, blockNumber, address, root, writeFlags);
-        _preBlockCache.NoResizeClear();
+        return _inner.BeginBlockCommit(blockNumber);
     }
 
     public bool IsPersisted(Hash256? address, in TreePath path, in ValueHash256 keccak)
@@ -51,22 +49,6 @@ public class PreCachedTrieStore : ITrieStore
             key => _inner.TryLoadRlp(key.Address, in key.Path, key.Hash));
 
         return rlp is not null;
-    }
-
-    public IReadOnlyTrieStore AsReadOnly(INodeStorage? keyValueStore = null) => _inner.AsReadOnly(keyValueStore);
-
-    public event EventHandler<ReorgBoundaryReached>? ReorgBoundaryReached
-    {
-        add => _inner.ReorgBoundaryReached += value;
-        remove => _inner.ReorgBoundaryReached -= value;
-    }
-
-    public IReadOnlyKeyValueStore TrieNodeRlpStore => _inner.TrieNodeRlpStore;
-
-    public void Set(Hash256? address, in TreePath path, in ValueHash256 keccak, byte[] rlp)
-    {
-        _preBlockCache[new(address, in path, in keccak)] = rlp;
-        _inner.Set(address, in path, in keccak, rlp);
     }
 
     public bool HasRoot(Hash256 stateRoot) => _inner.HasRoot(stateRoot);

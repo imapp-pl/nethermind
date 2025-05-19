@@ -1,21 +1,22 @@
-// SPDX-FileCopyrightText: 2022 Demerzel Solutions Limited
+// SPDX-FileCopyrightText: 2025 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using Nethermind.Blockchain;
-using Nethermind.Consensus.Ethash;
+using Autofac;
+using NUnit.Framework;
+using Nethermind.Config;
 using Nethermind.Consensus.Validators;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Extensions;
 using Nethermind.Core.Specs;
-using Nethermind.Core.Test.Builders;
+using Nethermind.Core.Test.Modules;
 using Nethermind.Crypto;
-using Nethermind.Db;
 using Nethermind.Int256;
 using Nethermind.Evm;
+using Nethermind.Evm.EvmObjectFormat;
 using Nethermind.Evm.Tracing;
 using Nethermind.Evm.TransactionProcessing;
 using Nethermind.Logging;
@@ -23,26 +24,26 @@ using Nethermind.Specs;
 using Nethermind.Specs.Forks;
 using Nethermind.Specs.Test;
 using Nethermind.State;
-using Nethermind.Trie.Pruning;
-using NUnit.Framework;
-using System.Threading.Tasks;
 
 namespace Ethereum.Test.Base
 {
     public abstract class GeneralStateTestBase
     {
-        private static ILogger _logger = new(new ConsoleAsyncLogger(LogLevel.Info));
-        private static ILogManager _logManager = LimboLogs.Instance;
+        private static ILogger _logger;
+        private static ILogManager _logManager = new TestLogManager(LogLevel.Info);
         private static readonly UInt256 _defaultBaseFeeForStateTest = 0xA;
-        private readonly TxValidator _txValidator = new(MainnetSpecProvider.Instance.ChainId);
+
+        static GeneralStateTestBase()
+        {
+            _logManager ??= LimboLogs.Instance;
+            _logger = _logManager.GetClassLogger();
+            KzgPolynomialCommitments.InitializeAsync().Wait();
+        }
 
         [SetUp]
         public void Setup()
         {
         }
-
-        [OneTimeSetUp]
-        public Task OneTimeSetUp() => KzgPolynomialCommitments.InitializeAsync();
 
         protected static void Setup(ILogManager logManager)
         {
@@ -57,39 +58,36 @@ namespace Ethereum.Test.Base
 
         protected EthereumTestResult RunTest(GeneralStateTest test, ITxTracer txTracer)
         {
-            TestContext.Write($"Running {test.Name} at {DateTime.UtcNow:HH:mm:ss.ffffff}");
-            Assert.IsNull(test.LoadFailure, "test data loading failure");
+            _logger.Info($"Running {test.Name} at {DateTime.UtcNow:HH:mm:ss.ffffff}");
+            Assert.That(test.LoadFailure, Is.Null, "test data loading failure");
 
-            IDb stateDb = new MemDb();
-            IDb codeDb = new MemDb();
+            EofValidator.Logger = _logger;
 
-            ISpecProvider specProvider = new CustomSpecProvider(
-                ((ForkActivation)0, Frontier.Instance), // TODO: this thing took a lot of time to find after it was removed!, genesis block is always initialized with Frontier
-                ((ForkActivation)1, test.Fork));
+            test.Fork = ChainUtils.ResolveSpec(test.Fork, test.ChainId);
 
-            if (specProvider.GenesisSpec != Frontier.Instance)
+            ISpecProvider specProvider =
+                new CustomSpecProvider(test.ChainId, test.ChainId,
+                    ((ForkActivation)0, test.GenesisSpec), // TODO: this thing took a lot of time to find after it was removed!, genesis block is always initialized with Frontier
+                    ((ForkActivation)1, test.Fork));
+
+            if (test.ChainId != GnosisSpecProvider.Instance.ChainId && specProvider.GenesisSpec != Frontier.Instance)
             {
                 Assert.Fail("Expected genesis spec to be Frontier for blockchain tests");
             }
 
-            TrieStore trieStore = new(stateDb, _logManager);
-            WorldState stateProvider = new(trieStore, codeDb, _logManager);
-            IBlockhashProvider blockhashProvider = new TestBlockhashProvider();
-            CodeInfoRepository codeInfoRepository = new();
-            IVirtualMachine virtualMachine = new VirtualMachine(
-                blockhashProvider,
-                specProvider,
-                codeInfoRepository,
-                _logManager);
+            IConfigProvider configProvider = new ConfigProvider();
+            using IContainer container = new ContainerBuilder()
+                .AddModule(new TestNethermindModule(configProvider))
+                .AddSingleton<IBlockhashProvider>(new TestBlockhashProvider())
+                .AddSingleton(specProvider)
+                .AddSingleton(_logManager)
+                .Build();
 
-            TransactionProcessor transactionProcessor = new(
-                specProvider,
-                stateProvider,
-                virtualMachine,
-                codeInfoRepository,
-                _logManager);
+            MainBlockProcessingContext mainBlockProcessingContext = container.Resolve<MainBlockProcessingContext>();
+            IWorldState stateProvider = mainBlockProcessingContext.WorldState;
+            ITransactionProcessor transactionProcessor = mainBlockProcessingContext.TransactionProcessor;
 
-            InitializeTestState(test, stateProvider, specProvider);
+            InitializeTestState(test.Pre, stateProvider, specProvider);
 
             BlockHeader header = new(
                 test.PreviousHash,
@@ -109,12 +107,13 @@ namespace Ethereum.Test.Base
             header.ParentBeaconBlockRoot = test.CurrentBeaconRoot;
             header.ExcessBlobGas = test.CurrentExcessBlobGas ?? (test.Fork is Cancun ? 0ul : null);
             header.BlobGasUsed = BlobGasCalculator.CalculateBlobGas(test.Transaction);
+            header.RequestsHash = test.RequestsHash;
 
             Stopwatch stopwatch = Stopwatch.StartNew();
             IReleaseSpec? spec = specProvider.GetSpec((ForkActivation)test.CurrentNumber);
 
             if (test.Transaction.ChainId is null)
-                test.Transaction.ChainId = MainnetSpecProvider.Instance.ChainId;
+                test.Transaction.ChainId = test.ChainId;
             if (test.ParentBlobGasUsed is not null && test.ParentExcessBlobGas is not null)
             {
                 BlockHeader parent = new(
@@ -134,42 +133,55 @@ namespace Ethereum.Test.Base
                 header.ExcessBlobGas = BlobGasCalculator.CalculateExcessBlobGas(parent, spec);
             }
 
-            Block block = Build.A.Block.WithTransactions(test.Transaction).WithHeader(header).TestObject;
-
-            bool isValid = _txValidator.IsWellFormed(test.Transaction, spec) && IsValidBlock(block, specProvider);
-
-            if (isValid)
+            ValidationResult txIsValid = new TxValidator(test.ChainId).IsWellFormed(test.Transaction, spec);
+            TransactionResult? txResult = null;
+            if (txIsValid)
             {
-                transactionProcessor.Execute(test.Transaction, new BlockExecutionContext(header), txTracer);
+                txResult = transactionProcessor.Execute(test.Transaction, new BlockExecutionContext(header, spec), txTracer);
+            }
+            else
+            {
+                _logger.Info($"Skipping invalid tx with error: {txIsValid.Error}");
             }
 
             stopwatch.Stop();
-
-            stateProvider.Commit(specProvider.GetSpec((ForkActivation)1));
-            stateProvider.CommitTree(1);
-
-            // '@winsvega added a 0-wei reward to the miner , so we had to add that into the state test execution phase. He needed it for retesteth.'
-            if (!stateProvider.AccountExists(test.CurrentCoinbase))
+            if (txResult is not null && txResult.Value == TransactionResult.Ok)
             {
-                stateProvider.CreateAccount(test.CurrentCoinbase, 0);
+                stateProvider.Commit(specProvider.GetSpec((ForkActivation)1));
+                stateProvider.CommitTree(1);
+
+                // '@winsvega added a 0-wei reward to the miner , so we had to add that into the state test execution phase. He needed it for retesteth.'
+                if (!stateProvider.AccountExists(test.CurrentCoinbase))
+                {
+                    stateProvider.CreateAccount(test.CurrentCoinbase, 0);
+                }
+
+                stateProvider.Commit(specProvider.GetSpec((ForkActivation)1));
+
+                stateProvider.RecalculateStateRoot();
             }
-
-            stateProvider.Commit(specProvider.GetSpec((ForkActivation)1));
-
-            stateProvider.RecalculateStateRoot();
+            else
+            {
+                stateProvider.Reset();
+            }
 
             List<string> differences = RunAssertions(test, stateProvider);
             EthereumTestResult testResult = new(test.Name, test.ForkName, differences.Count == 0);
             testResult.TimeInMs = stopwatch.Elapsed.TotalMilliseconds;
             testResult.StateRoot = stateProvider.StateRoot;
 
+            if (differences.Count > 0)
+            {
+                _logger.Info($"\nDifferences from expected\n{string.Join("\n", differences)}");
+            }
+
             //            Assert.Zero(differences.Count, "differences");
             return testResult;
         }
 
-        private static void InitializeTestState(GeneralStateTest test, WorldState stateProvider, ISpecProvider specProvider)
+        public static void InitializeTestState(Dictionary<Address, AccountState> preState, IWorldState stateProvider, ISpecProvider specProvider)
         {
-            foreach (KeyValuePair<Address, AccountState> accountState in test.Pre)
+            foreach (KeyValuePair<Address, AccountState> accountState in preState)
             {
                 foreach (KeyValuePair<UInt256, byte[]> storageItem in accountState.Value.Storage)
                 {
@@ -185,22 +197,6 @@ namespace Ethereum.Test.Base
             stateProvider.Commit(specProvider.GenesisSpec);
             stateProvider.CommitTree(0);
             stateProvider.Reset();
-        }
-
-        private bool IsValidBlock(Block block, ISpecProvider specProvider)
-        {
-            IBlockTree blockTree = Build.A.BlockTree()
-                .WithSpecProvider(specProvider)
-                .WithoutSettingHead
-                .TestObject;
-
-            var difficultyCalculator = new EthashDifficultyCalculator(specProvider);
-            var sealer = new EthashSealValidator(_logManager, difficultyCalculator, new CryptoRandom(), new Ethash(_logManager), Timestamper.Default);
-            IHeaderValidator headerValidator = new HeaderValidator(blockTree, sealer, specProvider, _logManager);
-            IUnclesValidator unclesValidator = new UnclesValidator(blockTree, headerValidator, _logManager);
-            IBlockValidator blockValidator = new BlockValidator(_txValidator, headerValidator, unclesValidator, specProvider, _logManager);
-
-            return blockValidator.ValidateOrphanedBlock(block, out _);
         }
 
         private List<string> RunAssertions(GeneralStateTest test, IWorldState stateProvider)

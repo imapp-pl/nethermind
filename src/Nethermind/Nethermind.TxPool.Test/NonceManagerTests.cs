@@ -9,8 +9,10 @@ using FluentAssertions;
 using Nethermind.Blockchain;
 using Nethermind.Core;
 using Nethermind.Core.Specs;
+using Nethermind.Core.Test;
 using Nethermind.Core.Test.Builders;
 using Nethermind.Db;
+using Nethermind.Evm;
 using Nethermind.Int256;
 using Nethermind.Logging;
 using Nethermind.Specs;
@@ -34,7 +36,7 @@ public class NonceManagerTests
     {
         ILogManager logManager = LimboLogs.Instance;
         _specProvider = MainnetSpecProvider.Instance;
-        var trieStore = new TrieStore(new MemDb(), logManager);
+        var trieStore = TestTrieStoreFactory.Build(new MemDb(), logManager);
         var codeDb = new MemDb();
         _stateProvider = new WorldState(trieStore, codeDb, logManager);
         _blockTree = Substitute.For<IBlockTree>();
@@ -42,8 +44,8 @@ public class NonceManagerTests
         _blockTree.Head.Returns(block);
         _blockTree.FindBestSuggestedHeader().Returns(Build.A.BlockHeader.WithNumber(10000000).TestObject);
 
-        _headInfo = new ChainHeadInfoProvider(_specProvider, _blockTree, _stateProvider);
-        _nonceManager = new NonceManager(_headInfo.AccountStateProvider);
+        _headInfo = new ChainHeadInfoProvider(_specProvider, _blockTree, _stateProvider, new CodeInfoRepository());
+        _nonceManager = new NonceManager(_headInfo.ReadOnlyStateProvider);
     }
 
     [Test]

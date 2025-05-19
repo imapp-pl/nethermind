@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
+using System.Threading.Tasks;
 using Nethermind.Blockchain;
 using Nethermind.Blockchain.BeaconBlockRoot;
 using Nethermind.Blockchain.Blocks;
@@ -18,7 +19,7 @@ namespace Nethermind.Consensus.Processing
     /// <summary>
     /// Not thread safe.
     /// </summary>
-    public class ReadOnlyChainProcessingEnv : IDisposable
+    public class ReadOnlyChainProcessingEnv : IAsyncDisposable
     {
         private readonly BlockchainProcessor _blockProcessingQueue;
         public IBlockProcessor BlockProcessor { get; }
@@ -45,9 +46,6 @@ namespace Nethermind.Consensus.Processing
             _blockProcessingQueue = new BlockchainProcessor(blockTree, BlockProcessor, recoveryStep, stateReader, logManager, BlockchainProcessor.Options.NoReceipts);
             BlockProcessingQueue = _blockProcessingQueue;
             ChainProcessor = new OneTimeChainProcessor(scope.WorldState, _blockProcessingQueue);
-            _blockProcessingQueue = new BlockchainProcessor(blockTree, BlockProcessor, recoveryStep, stateReader, logManager, BlockchainProcessor.Options.NoReceipts);
-            BlockProcessingQueue = _blockProcessingQueue;
-            ChainProcessor = new OneTimeChainProcessor(scope.WorldState, _blockProcessingQueue);
         }
 
         protected virtual IBlockProcessor CreateBlockProcessor(
@@ -68,14 +66,12 @@ namespace Nethermind.Consensus.Processing
                 transactionsExecutor,
                 scope.WorldState,
                 receiptStorage,
+                scope.TransactionProcessor,
+                new BeaconBlockRootHandler(scope.TransactionProcessor, scope.WorldState),
                 new BlockhashStore(specProvider, scope.WorldState),
-                new BeaconBlockRootHandler(scope.TransactionProcessor),
                 logManager);
         }
 
-        public void Dispose()
-        {
-            _blockProcessingQueue?.Dispose();
-        }
+        public ValueTask DisposeAsync() => _blockProcessingQueue?.DisposeAsync() ?? default;
     }
 }

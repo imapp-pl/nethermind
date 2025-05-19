@@ -3,11 +3,12 @@
 
 using Nethermind.Blockchain;
 using Nethermind.Blockchain.Blocks;
-using Nethermind.Blockchain.Find;
 using Nethermind.Blockchain.Receipts;
 using Nethermind.Consensus;
+using Nethermind.Core;
 using Nethermind.Crypto;
 using Nethermind.Db.Blooms;
+using Nethermind.Facade.Find;
 using Nethermind.State.Repositories;
 using Nethermind.TxPool;
 using Nethermind.Wallet;
@@ -23,11 +24,12 @@ namespace Nethermind.Api
         ILogFinder? LogFinder { get; set; }
         ISigner? EngineSigner { get; set; }
         ISignerStore? EngineSignerStore { get; set; }
-        ProtectedPrivateKey? NodeKey { get; set; }
+        [SkipServiceCollection]
+        IProtectedPrivateKey? NodeKey { get; set; }
         IReceiptStorage? ReceiptStorage { get; set; }
         IReceiptFinder? ReceiptFinder { get; set; }
         IReceiptMonitor? ReceiptMonitor { get; set; }
         IWallet? Wallet { get; set; }
-        IBlockStore? BadBlocksStore { get; set; }
+        IBadBlockStore? BadBlocksStore { get; set; }
     }
 }

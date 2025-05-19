@@ -5,6 +5,8 @@ using System;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
+using Nethermind.Api;
+using Nethermind.Blockchain;
 using Nethermind.Consensus;
 using Nethermind.Consensus.Producers;
 using Nethermind.Core.Specs;
@@ -21,6 +23,7 @@ public partial class EngineRpcModule : IEngineRpcModule
     private readonly IAsyncHandler<ExecutionPayload, PayloadStatusV1> _newPayloadV1Handler;
     private readonly IForkchoiceUpdatedHandler _forkchoiceUpdatedV1Handler;
     private readonly IHandler<TransitionConfigurationV1, TransitionConfigurationV1> _transitionConfigurationHandler;
+    private readonly IEngineRequestsTracker _engineRequestsTracker;
     private readonly SemaphoreSlim _locker = new(1, 1);
     private readonly TimeSpan _timeout = TimeSpan.FromSeconds(8);
     private readonly GCKeeper _gcKeeper;
@@ -39,17 +42,17 @@ public partial class EngineRpcModule : IEngineRpcModule
 
     protected async Task<ResultWrapper<ForkchoiceUpdatedV1Result>> ForkchoiceUpdated(ForkchoiceStateV1 forkchoiceState, PayloadAttributes? payloadAttributes, int version)
     {
+        _engineRequestsTracker.OnForkchoiceUpdatedCalled();
         if (await _locker.WaitAsync(_timeout))
         {
-            Stopwatch watch = Stopwatch.StartNew();
+            long startTime = Stopwatch.GetTimestamp();
             try
             {
                 return await _forkchoiceUpdatedV1Handler.Handle(forkchoiceState, payloadAttributes, version);
             }
             finally
             {
-                watch.Stop();
-                Metrics.ForkchoiceUpdedExecutionTime = watch.ElapsedMilliseconds;
+                Metrics.ForkchoiceUpdedExecutionTime = (long)Stopwatch.GetElapsedTime(startTime).TotalMilliseconds;
                 _locker.Release();
             }
         }
@@ -62,7 +65,9 @@ public partial class EngineRpcModule : IEngineRpcModule
 
     protected async Task<ResultWrapper<PayloadStatusV1>> NewPayload(IExecutionPayloadParams executionPayloadParams, int version)
     {
+        _engineRequestsTracker.OnNewPayloadCalled();
         ExecutionPayload executionPayload = executionPayloadParams.ExecutionPayload;
+        executionPayload.ExecutionRequests = executionPayloadParams.ExecutionRequests;
 
         if (!executionPayload.ValidateFork(_specProvider))
         {
@@ -82,11 +87,16 @@ public partial class EngineRpcModule : IEngineRpcModule
 
         if (await _locker.WaitAsync(_timeout))
         {
-            Stopwatch watch = Stopwatch.StartNew();
+            long startTime = Stopwatch.GetTimestamp();
             try
             {
                 using IDisposable region = _gcKeeper.TryStartNoGCRegion();
                 return await _newPayloadV1Handler.HandleAsync(executionPayload);
+            }
+            catch (BlockchainException exception)
+            {
+                if (_logger.IsDebug) _logger.Error($"DEBUG/ERROR engine_newPayloadV{version} failed: {exception}");
+                return ResultWrapper<PayloadStatusV1>.Fail(exception.Message, ErrorCodes.UnknownBlockError);
             }
             catch (Exception exception)
             {
@@ -95,8 +105,7 @@ public partial class EngineRpcModule : IEngineRpcModule
             }
             finally
             {
-                watch.Stop();
-                Metrics.NewPayloadExecutionTime = watch.ElapsedMilliseconds;
+                Metrics.NewPayloadExecutionTime = (long)Stopwatch.GetElapsedTime(startTime).TotalMilliseconds;
                 _locker.Release();
             }
         }

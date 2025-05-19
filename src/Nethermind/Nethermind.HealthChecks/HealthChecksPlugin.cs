@@ -29,16 +29,14 @@ namespace Nethermind.HealthChecks
         private IInitConfig _initConfig;
         private IMergeConfig _mergeConfig;
 
-        private ClHealthLogger _clHealthLogger;
+        private ClHealthRequestsTracker _engineRequestsTracker;
         private FreeDiskSpaceChecker _freeDiskSpaceChecker;
-
-        private const int ClUnavailableReportMessageDelay = 5;
 
         public async ValueTask DisposeAsync()
         {
-            if (_clHealthLogger is not null)
+            if (_engineRequestsTracker is not null)
             {
-                await _clHealthLogger.DisposeAsync();
+                await _engineRequestsTracker.DisposeAsync();
             }
             if (_freeDiskSpaceChecker is not null)
             {
@@ -53,6 +51,7 @@ namespace Nethermind.HealthChecks
         public string Author => "Nethermind";
 
         public bool MustInitialize => true;
+        public bool Enabled => true; // Always enabled
 
         public FreeDiskSpaceChecker FreeDiskSpaceChecker => LazyInitializer.EnsureInitialized(ref _freeDiskSpaceChecker,
             () => new FreeDiskSpaceChecker(
@@ -70,6 +69,9 @@ namespace Nethermind.HealthChecks
             _initConfig = _api.Config<IInitConfig>();
             _mergeConfig = _api.Config<IMergeConfig>();
             _logger = api.LogManager.GetClassLogger();
+
+            _engineRequestsTracker = _mergeConfig.Enabled ? new(_api.Timestamper, _healthChecksConfig.MaxIntervalClRequestTime, _logger) : null;
+            _api.EngineRequestsTracker = _engineRequestsTracker;
 
             //will throw an exception and close app or block until enough disk space is available (LowStorageCheckAwaitOnStartup)
             EnsureEnoughFreeSpace();
@@ -122,7 +124,7 @@ namespace Nethermind.HealthChecks
 
         public Task InitRpcModules()
         {
-            IDriveInfo[] drives = Array.Empty<IDriveInfo>();
+            IDriveInfo[] drives = [];
 
             if (_healthChecksConfig.LowStorageSpaceWarningThreshold > 0 || _healthChecksConfig.LowStorageSpaceShutdownThreshold > 0)
             {
@@ -138,20 +140,20 @@ namespace Nethermind.HealthChecks
             }
 
             _nodeHealthService = new NodeHealthService(_api.SyncServer,
-                _api.BlockchainProcessor!, _api.BlockProducerRunner!, _healthChecksConfig, _api.HealthHintService!,
-                _api.EthSyncingInfo!, _api.RpcCapabilitiesProvider, _api, drives, _initConfig.IsMining);
+                _api.MainProcessingContext!.BlockchainProcessor, _api.BlockProducerRunner!, _healthChecksConfig, _api.HealthHintService!,
+                _api.EthSyncingInfo!, _engineRequestsTracker, _api.SpecProvider!.TerminalTotalDifficulty, drives, _initConfig.IsMining);
+
+            if (_mergeConfig.Enabled)
+            {
+                _ = _engineRequestsTracker.StartAsync(); // Fire and forget
+                _api.DisposeStack.Push(_engineRequestsTracker);
+            }
 
             if (_healthChecksConfig.Enabled)
             {
                 HealthRpcModule healthRpcModule = new(_nodeHealthService);
                 _api.RpcModuleProvider!.Register(new SingletonModulePool<IHealthRpcModule>(healthRpcModule, true));
                 if (_logger.IsInfo) _logger.Info("Health RPC Module has been enabled");
-            }
-
-            if (_mergeConfig.Enabled)
-            {
-                _clHealthLogger = new ClHealthLogger(_nodeHealthService, _logger);
-                _clHealthLogger.StartAsync(default);
             }
 
             return Task.CompletedTask;
@@ -169,50 +171,6 @@ namespace Nethermind.HealthChecks
             if (_healthChecksConfig.LowStorageSpaceShutdownThreshold > 0)
             {
                 FreeDiskSpaceChecker.EnsureEnoughFreeSpaceOnStart(_api.TimerFactory);
-            }
-        }
-
-        private class ClHealthLogger : IHostedService, IAsyncDisposable
-        {
-            private readonly INodeHealthService _nodeHealthService;
-            private readonly ILogger _logger;
-
-            private Timer _timer;
-
-            public ClHealthLogger(INodeHealthService nodeHealthService, ILogger logger)
-            {
-                _nodeHealthService = nodeHealthService;
-                _logger = logger;
-            }
-
-            public Task StartAsync(CancellationToken cancellationToken)
-            {
-                _timer = new Timer(ReportClStatus, null, TimeSpan.Zero,
-                    TimeSpan.FromSeconds(ClUnavailableReportMessageDelay));
-
-                return Task.CompletedTask;
-            }
-
-            public Task StopAsync(CancellationToken cancellationToken)
-            {
-                _timer.Change(Timeout.Infinite, 0);
-
-                return Task.CompletedTask;
-            }
-
-            public async ValueTask DisposeAsync()
-            {
-                await StopAsync(default);
-                await _timer.DisposeAsync();
-            }
-
-            private void ReportClStatus(object _)
-            {
-                if (!_nodeHealthService.CheckClAlive())
-                {
-                    if (_logger.IsWarn)
-                        _logger.Warn("No incoming messages from the consensus client that is required for sync.");
-                }
             }
         }
     }

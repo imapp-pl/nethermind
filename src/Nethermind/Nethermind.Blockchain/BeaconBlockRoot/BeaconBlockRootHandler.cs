@@ -1,22 +1,28 @@
 // SPDX-FileCopyrightText: 2023 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
-using System;
 using Nethermind.Core;
 using Nethermind.Core.Eip2930;
 using Nethermind.Core.Specs;
 using Nethermind.Crypto;
+using Nethermind.Evm;
 using Nethermind.Evm.Tracing;
 using Nethermind.Evm.TransactionProcessing;
 using Nethermind.Int256;
+using Nethermind.State;
 
 namespace Nethermind.Blockchain.BeaconBlockRoot;
-public class BeaconBlockRootHandler(ITransactionProcessor processor) : IBeaconBlockRootHandler
+public class BeaconBlockRootHandler(ITransactionProcessor processor, IWorldState stateProvider) : IBeaconBlockRootHandler
 {
     private const long GasLimit = 30_000_000L;
 
-    public (Address? toAddress, AccessList? accessList) BeaconRootsAccessList(Block block, IReleaseSpec spec, bool includeStorageCells = true)
+    AccessList? IHasAccessList.GetAccessList(Block block, IReleaseSpec spec)
+        => BeaconRootsAccessList(block, spec, includeStorageCells: true).accessList;
+
+    public (Address? toAddress, AccessList? accessList) BeaconRootsAccessList(Block block, IReleaseSpec spec, bool includeStorageCells = false)
     {
+        const int HistoryBufferLength = 8191;
+
         BlockHeader? header = block.Header;
         bool canInsertBeaconRoot = spec.IsBeaconBlockRootAvailable
                                   && !header.IsGenesis
@@ -26,7 +32,7 @@ public class BeaconBlockRootHandler(ITransactionProcessor processor) : IBeaconBl
             spec.Eip4788ContractAddress ?? Eip4788Constants.BeaconRootsAddress :
             null;
 
-        if (eip4788ContractAddress is null)
+        if (eip4788ContractAddress is null || !stateProvider.AccountExists(eip4788ContractAddress))
         {
             return (null, null);
         }
@@ -36,13 +42,20 @@ public class BeaconBlockRootHandler(ITransactionProcessor processor) : IBeaconBl
 
         if (includeStorageCells)
         {
-            builder.AddStorage(block.Timestamp % 8191);
+            // https://eips.ethereum.org/EIPS/eip-4788
+            // Set the storage value at header.timestamp % HISTORY_BUFFER_LENGTH to be header.timestamp
+            ulong slotIndex = header.Timestamp % HistoryBufferLength;
+            UInt256 slot256 = slotIndex;
+            builder.AddStorage(in slot256);
+            // Set the storage value at header.timestamp % HISTORY_BUFFER_LENGTH + HISTORY_BUFFER_LENGTH to be calldata[0:32]
+            slot256 = slotIndex + HistoryBufferLength;
+            builder.AddStorage(in slot256);
         }
 
         return (eip4788ContractAddress, builder.Build());
     }
 
-    public void StoreBeaconRoot(Block block, IReleaseSpec spec)
+    public void StoreBeaconRoot(Block block, IReleaseSpec spec, ITxTracer tracer)
     {
         (Address? toAddress, AccessList? accessList) = BeaconRootsAccessList(block, spec, includeStorageCells: false);
 
@@ -62,7 +75,7 @@ public class BeaconBlockRootHandler(ITransactionProcessor processor) : IBeaconBl
 
             transaction.Hash = transaction.CalculateHash();
 
-            processor.Execute(transaction, header, NullTxTracer.Instance);
+            processor.Execute(transaction, new BlockExecutionContext(header, spec), tracer);
         }
     }
 }

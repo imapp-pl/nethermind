@@ -1,13 +1,9 @@
 // SPDX-FileCopyrightText: 2024 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
+using CkzgLib;
 using Nethermind.Core;
 using Nethermind.Crypto;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace Nethermind.Consensus.Messages;
 public static class TxErrorMessages
@@ -15,7 +11,9 @@ public static class TxErrorMessages
     public static string InvalidTxType(string name) =>
         $"InvalidTxType: Transaction type in {name} is not supported.";
     public const string IntrinsicGasTooLow =
-        "IntrinsicGasTooLow: Gas limit is too low.";
+        "intrinsic gas too low";
+    public const string TxMissingTo =
+        "blob transaction of type create";
 
     public const string InvalidTxSignature =
         "InvalidTxSignature: Signature is invalid.";
@@ -26,7 +24,7 @@ public static class TxErrorMessages
         "InvalidMaxPriorityFeePerGas: Cannot be higher than maxFeePerGas.";
 
     public const string ContractSizeTooBig =
-        "ContractSizeTooBig: Max initcode size exceeded.";
+        "max initcode size exceeded";
 
     public const string NotAllowedMaxFeePerBlobGas =
         "NotAllowedMaxFeePerBlobGas: Cannot be set.";
@@ -37,20 +35,20 @@ public static class TxErrorMessages
     public const string InvalidTransaction =
         $"InvalidTransaction: Cannot be {nameof(ShardBlobNetworkWrapper)}.";
 
-    public const string TxMissingTo =
-        "TxMissingTo: Must be set.";
+    public const string NotAllowedCreateTransaction =
+        "NotAllowedCreateTransaction: To must be set.";
 
     public const string BlobTxMissingMaxFeePerBlobGas =
         "BlobTxMissingMaxFeePerBlobGas: Must be set.";
 
     public const string BlobTxMissingBlobVersionedHashes =
-        "BlobTxMissingBlobVersionedHashes: Must be set.";
+        "blob transaction missing blob hashes";
 
-    public static readonly string BlobTxGasLimitExceeded =
-        $"BlobTxGasLimitExceeded: Transaction exceeded {Eip4844Constants.MaxBlobGasPerTransaction}.";
+    public static string BlobTxGasLimitExceeded(ulong totalDataGas, ulong maxBlobGas) =>
+        $"BlobTxGasLimitExceeded: Transaction's totalDataGas={totalDataGas} exceeded MaxBlobGas per transaction={maxBlobGas}.";
 
     public const string BlobTxMissingBlobs =
-        "BlobTxMissingBlobs: Blob transaction must have blobs.";
+        "blob transaction missing blob hashes";
 
     public const string MissingBlobVersionedHash =
         "MissingBlobVersionedHash: Must be set.";
@@ -62,13 +60,19 @@ public static class TxErrorMessages
         "InvalidBlobVersionedHashVersion: Blob version not supported.";
 
     public static readonly string ExceededBlobSize =
-        $"ExceededBlobSize: Cannot be more than {Ckzg.Ckzg.BytesPerBlob}.";
+        $"ExceededBlobSize: Cannot be more than {Ckzg.BytesPerBlob}.";
 
     public static readonly string ExceededBlobCommitmentSize =
-        $"ExceededBlobCommitmentSize: Cannot be more than {Ckzg.Ckzg.BytesPerCommitment}.";
+        $"ExceededBlobCommitmentSize: Cannot be more than {Ckzg.BytesPerCommitment}.";
 
     public static readonly string InvalidBlobProofSize =
-        $"InvalidBlobProofSize: Cannot be more than {Ckzg.Ckzg.BytesPerProof}.";
+        $"InvalidBlobProofSize: Cannot be more than {Ckzg.BytesPerProof}.";
+
+    public const string NotAllowedAuthorizationList = $"NotAllowedAuthorizationList: Only transactions with type {nameof(TxType.SetCode)} can have authorization_list.";
+
+    public const string MissingAuthorizationList = "MissingAuthorizationList: Must be set.";
+
+    public const string InvalidAuthoritySignature = "InvalidAuthoritySignature: Invalid signature in authorization list.";
 
     public const string InvalidBlobCommitmentHash =
         "InvalidBlobCommitmentHash: Commitment hash does not match.";
@@ -78,4 +82,16 @@ public static class TxErrorMessages
 
     public const string InvalidBlobData
         = "InvalidTxBlobData: Number of blobs, hashes, commitments and proofs must match.";
+
+    public const string InvalidCreateTxData
+        = "InvalidCreateTxData: Legacy createTx cannot create Eof code";
+
+    public const string TooManyEofInitcodes
+        = $"TooManyEofInitcodes: Eof initcodes count exceeded limit";
+
+    public const string EmptyEofInitcodesField
+        = $"EmptyEofInitcodesField: Eof initcodes count must be greater than 0";
+
+    public const string EofContractSizeInvalid
+        = "EofContractSizeInvalid: Eof initcode size is invalid (either 0 or too big)";
 }

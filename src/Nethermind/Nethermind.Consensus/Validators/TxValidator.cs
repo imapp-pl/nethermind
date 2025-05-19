@@ -3,6 +3,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using CkzgLib;
 using Nethermind.Consensus.Messages;
 using Nethermind.Core;
 using Nethermind.Core.Specs;
@@ -25,6 +27,7 @@ public sealed class TxValidator : ITxValidator
             new LegacySignatureTxValidator(chainId),
             ContractSizeTxValidator.Instance,
             NonBlobFieldsTxValidator.Instance,
+            NonSetCodeFieldsTxValidator.Instance
         ]));
         RegisterValidator(TxType.AccessList, new CompositeTxValidator([
             new ReleaseSpecTxValidator(static spec => spec.IsEip2930Enabled),
@@ -33,6 +36,7 @@ public sealed class TxValidator : ITxValidator
             new ExpectedChainIdTxValidator(chainId),
             ContractSizeTxValidator.Instance,
             NonBlobFieldsTxValidator.Instance,
+            NonSetCodeFieldsTxValidator.Instance
         ]));
         RegisterValidator(TxType.EIP1559, new CompositeTxValidator([
             new ReleaseSpecTxValidator(static spec => spec.IsEip1559Enabled),
@@ -42,6 +46,7 @@ public sealed class TxValidator : ITxValidator
             GasFieldsTxValidator.Instance,
             ContractSizeTxValidator.Instance,
             NonBlobFieldsTxValidator.Instance,
+            NonSetCodeFieldsTxValidator.Instance
         ]));
         RegisterValidator(TxType.Blob, new CompositeTxValidator([
             new ReleaseSpecTxValidator(static spec => spec.IsEip4844Enabled),
@@ -51,7 +56,19 @@ public sealed class TxValidator : ITxValidator
             GasFieldsTxValidator.Instance,
             ContractSizeTxValidator.Instance,
             BlobFieldsTxValidator.Instance,
-            MempoolBlobTxValidator.Instance
+            MempoolBlobTxValidator.Instance,
+            NonSetCodeFieldsTxValidator.Instance
+        ]));
+        RegisterValidator(TxType.SetCode, new CompositeTxValidator([
+            new ReleaseSpecTxValidator(static spec => spec.IsEip7702Enabled),
+            IntrinsicGasTxValidator.Instance,
+            SignatureTxValidator.Instance,
+            new ExpectedChainIdTxValidator(chainId),
+            GasFieldsTxValidator.Instance,
+            ContractSizeTxValidator.Instance,
+            NonBlobFieldsTxValidator.Instance,
+            NoContractCreationTxValidator.Instance,
+            AuthorizationListTxValidator.Instance,
         ]));
     }
 
@@ -94,11 +111,14 @@ public sealed class IntrinsicGasTxValidator : ITxValidator
     public static readonly IntrinsicGasTxValidator Instance = new();
     private IntrinsicGasTxValidator() { }
 
-    public ValidationResult IsWellFormed(Transaction transaction, IReleaseSpec releaseSpec) =>
+    public ValidationResult IsWellFormed(Transaction transaction, IReleaseSpec releaseSpec)
+    {
         // This is unnecessarily calculated twice - at validation and execution times.
-        transaction.GasLimit < IntrinsicGasCalculator.Calculate(transaction, releaseSpec)
+        IntrinsicGas intrinsicGas = IntrinsicGasCalculator.Calculate(transaction, releaseSpec);
+        return transaction.GasLimit < intrinsicGas.MinimalGas
             ? TxErrorMessages.IntrinsicGasTooLow
             : ValidationResult.Success;
+    }
 }
 
 public sealed class ReleaseSpecTxValidator(Func<IReleaseSpec, bool> validate) : ITxValidator
@@ -150,6 +170,18 @@ public sealed class NonBlobFieldsTxValidator : ITxValidator
     };
 }
 
+public sealed class NonSetCodeFieldsTxValidator : ITxValidator
+{
+    public static readonly NonSetCodeFieldsTxValidator Instance = new();
+    private NonSetCodeFieldsTxValidator() { }
+
+    public ValidationResult IsWellFormed(Transaction transaction, IReleaseSpec releaseSpec) => transaction switch
+    {
+        { AuthorizationList: not null } => TxErrorMessages.NotAllowedAuthorizationList,
+        _ => ValidationResult.Success
+    };
+}
+
 public sealed class BlobFieldsTxValidator : ITxValidator
 {
     public static readonly BlobFieldsTxValidator Instance = new();
@@ -161,14 +193,15 @@ public sealed class BlobFieldsTxValidator : ITxValidator
             { To: null } => TxErrorMessages.TxMissingTo,
             { MaxFeePerBlobGas: null } => TxErrorMessages.BlobTxMissingMaxFeePerBlobGas,
             { BlobVersionedHashes: null } => TxErrorMessages.BlobTxMissingBlobVersionedHashes,
-            _ => ValidateBlobFields(transaction)
+            _ => ValidateBlobFields(transaction, releaseSpec)
         };
 
-    private ValidationResult ValidateBlobFields(Transaction transaction)
+    private ValidationResult ValidateBlobFields(Transaction transaction, IReleaseSpec spec)
     {
         int blobCount = transaction.BlobVersionedHashes!.Length;
         ulong totalDataGas = BlobGasCalculator.CalculateBlobGas(blobCount);
-        return totalDataGas > Eip4844Constants.MaxBlobGasPerTransaction ? TxErrorMessages.BlobTxGasLimitExceeded
+        var maxBlobGasPerTxn = spec.GetMaxBlobGasPerBlock();
+        return totalDataGas > maxBlobGasPerTxn ? TxErrorMessages.BlobTxGasLimitExceeded(totalDataGas, maxBlobGasPerTxn)
             : blobCount < Eip4844Constants.MinBlobsPerTransaction ? TxErrorMessages.BlobTxMissingBlobs
             : ValidateBlobVersionedHashes();
 
@@ -210,17 +243,17 @@ public sealed class MempoolBlobTxValidator : ITxValidator
         {
             for (int i = 0; i < blobCount; i++)
             {
-                if (wrapper.Blobs[i].Length != Ckzg.Ckzg.BytesPerBlob)
+                if (wrapper.Blobs[i].Length != Ckzg.BytesPerBlob)
                 {
                     return TxErrorMessages.ExceededBlobSize;
                 }
 
-                if (wrapper.Commitments[i].Length != Ckzg.Ckzg.BytesPerCommitment)
+                if (wrapper.Commitments[i].Length != Ckzg.BytesPerCommitment)
                 {
                     return TxErrorMessages.ExceededBlobCommitmentSize;
                 }
 
-                if (wrapper.Proofs[i].Length != Ckzg.Ckzg.BytesPerProof)
+                if (wrapper.Proofs[i].Length != Ckzg.BytesPerProof)
                 {
                     return TxErrorMessages.InvalidBlobProofSize;
                 }
@@ -281,4 +314,25 @@ public sealed class SignatureTxValidator : BaseSignatureTxValidator
 {
     public static readonly SignatureTxValidator Instance = new();
     private SignatureTxValidator() { }
+}
+
+public sealed class NoContractCreationTxValidator : ITxValidator
+{
+    public static readonly NoContractCreationTxValidator Instance = new();
+    private NoContractCreationTxValidator() { }
+    public ValidationResult IsWellFormed(Transaction transaction, IReleaseSpec releaseSpec) =>
+        transaction.IsContractCreation ? TxErrorMessages.NotAllowedCreateTransaction : ValidationResult.Success;
+}
+
+public sealed class AuthorizationListTxValidator : ITxValidator
+{
+    public static readonly AuthorizationListTxValidator Instance = new();
+    private AuthorizationListTxValidator() { }
+
+    public ValidationResult IsWellFormed(Transaction transaction, IReleaseSpec releaseSpec) =>
+        transaction.AuthorizationList switch
+        {
+            null or { Length: 0 } => TxErrorMessages.MissingAuthorizationList,
+            _ => ValidationResult.Success
+        };
 }

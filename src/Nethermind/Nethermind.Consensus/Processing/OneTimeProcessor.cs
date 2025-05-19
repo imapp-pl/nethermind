@@ -2,22 +2,22 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using Nethermind.Core;
-using Nethermind.Db;
 using Nethermind.Evm.Tracing;
 using Nethermind.State;
 
 namespace Nethermind.Consensus.Processing
 {
-    public class OneTimeChainProcessor : IBlockchainProcessor
+    public sealed class OneTimeChainProcessor : IBlockchainProcessor
     {
         public ITracerBag Tracers => _processor.Tracers;
 
         private readonly IBlockchainProcessor _processor;
         private readonly IWorldState _worldState;
 
-        private readonly object _lock = new();
+        private readonly Lock _lock = new();
 
         public OneTimeChainProcessor(IWorldState worldState, IBlockchainProcessor processor)
         {
@@ -35,11 +35,11 @@ namespace Nethermind.Consensus.Processing
             return _processor.StopAsync(processRemainingBlocks);
         }
 
-        public Block? Process(Block block, ProcessingOptions options, IBlockTracer tracer)
+        public Block? Process(Block block, ProcessingOptions options, IBlockTracer tracer, CancellationToken token)
         {
             lock (_lock)
             {
-                return _processor.Process(block, options, tracer);
+                return _processor.Process(block, options, tracer, token);
             }
         }
 
@@ -54,9 +54,6 @@ namespace Nethermind.Consensus.Processing
         public event EventHandler<IBlockchainProcessor.InvalidBlockEventArgs>? InvalidBlock;
 #pragma warning restore 67
 
-        public void Dispose()
-        {
-            _processor?.Dispose();
-        }
+        public ValueTask DisposeAsync() => _processor?.DisposeAsync() ?? default;
     }
 }

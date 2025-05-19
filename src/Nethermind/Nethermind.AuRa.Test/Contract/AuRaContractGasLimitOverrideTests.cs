@@ -10,6 +10,7 @@ using Nethermind.Blockchain;
 using Nethermind.Blockchain.BeaconBlockRoot;
 using Nethermind.Consensus;
 using Nethermind.Consensus.AuRa;
+using Nethermind.Consensus.AuRa.Config;
 using Nethermind.Consensus.AuRa.Contracts;
 using Nethermind.Consensus.Processing;
 using Nethermind.Consensus.Rewards;
@@ -17,6 +18,8 @@ using Nethermind.Consensus.Validators;
 using Nethermind.Consensus.Withdrawals;
 using Nethermind.Core;
 using Nethermind.Logging;
+using Nethermind.Specs.ChainSpecStyle;
+using Nethermind.State;
 using NUnit.Framework;
 
 namespace Nethermind.AuRa.Test.Contract;
@@ -79,10 +82,13 @@ public class AuRaContractGasLimitOverrideTests
         public IGasLimitCalculator GasLimitCalculator { get; private set; }
         public AuRaContractGasLimitOverride.Cache GasLimitOverrideCache { get; private set; }
 
-        protected override BlockProcessor CreateBlockProcessor()
+        protected override BlockProcessor CreateBlockProcessor(IWorldState worldState)
         {
-            KeyValuePair<long, Address> blockGasLimitContractTransition = ChainSpec.AuRa.BlockGasLimitContractTransitions.First();
-            BlockGasLimitContract gasLimitContract = new(AbiEncoder.Instance, blockGasLimitContractTransition.Value, blockGasLimitContractTransition.Key,
+            KeyValuePair<long, Address> blockGasLimitContractTransition = ChainSpec.EngineChainSpecParametersProvider
+                .GetChainSpecParameters<AuRaChainSpecEngineParameters>().BlockGasLimitContractTransitions
+                .First();
+            BlockGasLimitContract gasLimitContract = new(AbiEncoder.Instance, blockGasLimitContractTransition.Value,
+                blockGasLimitContractTransition.Key,
                 new ReadOnlyTxProcessingEnv(
                     WorldStateManager,
                     BlockTree.AsReadOnly(), SpecProvider, LimboLogs.Instance));
@@ -94,16 +100,16 @@ public class AuRaContractGasLimitOverrideTests
                 SpecProvider,
                 Always.Valid,
                 new RewardCalculator(SpecProvider),
-                new BlockProcessor.BlockValidationTransactionsExecutor(TxProcessor, State),
-                State,
+                new BlockProcessor.BlockValidationTransactionsExecutor(TxProcessor, worldState),
+                worldState,
                 ReceiptStorage,
-                new BeaconBlockRootHandler(TxProcessor),
+                new BeaconBlockRootHandler(TxProcessor, worldState),
                 LimboLogs.Instance,
                 BlockTree,
                 NullWithdrawalProcessor.Instance,
-                null,
-                null,
-                GasLimitCalculator as AuRaContractGasLimitOverride,
+                TxProcessor,
+                auRaValidator: null,
+                gasLimitOverride: GasLimitCalculator as AuRaContractGasLimitOverride,
                 preWarmer: CreateBlockCachePreWarmer());
         }
 
@@ -112,11 +118,13 @@ public class AuRaContractGasLimitOverrideTests
 
     public class TestGasLimitContractBlockchainLateBlockGasLimit : TestGasLimitContractBlockchain
     {
-        protected override BlockProcessor CreateBlockProcessor()
+        protected override BlockProcessor CreateBlockProcessor(IWorldState worldState)
         {
-            KeyValuePair<long, Address> blockGasLimitContractTransition = ChainSpec.AuRa.BlockGasLimitContractTransitions.First();
-            ChainSpec.AuRa.BlockGasLimitContractTransitions = new Dictionary<long, Address>() { { 10, blockGasLimitContractTransition.Value } };
-            return base.CreateBlockProcessor();
+            var parameters = ChainSpec.EngineChainSpecParametersProvider
+                .GetChainSpecParameters<AuRaChainSpecEngineParameters>();
+            KeyValuePair<long, Address> blockGasLimitContractTransition = parameters.BlockGasLimitContractTransitions.First();
+            parameters.BlockGasLimitContractTransitions = new Dictionary<long, Address>() { { 10, blockGasLimitContractTransition.Value } };
+            return base.CreateBlockProcessor(worldState);
         }
     }
 }

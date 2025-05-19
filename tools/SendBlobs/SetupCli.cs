@@ -1,88 +1,117 @@
 // SPDX-FileCopyrightText: 2023 Demerzel Solutions Limited
 // SPDX-License-Identifier: LGPL-3.0-only
 
-using McMaster.Extensions.CommandLineUtils;
-using Nethermind.Cli;
-using Nethermind.Cli.Console;
 using Nethermind.Consensus;
-using Nethermind.Core;
 using Nethermind.Crypto;
 using Nethermind.Int256;
 using Nethermind.Logging;
+using System.CommandLine;
+using Ethereum.Test.Base;
+using Nethermind.Core.Specs;
+using Nethermind.Specs.Forks;
+using Nethermind.JsonRpc.Client;
 using Nethermind.Serialization.Json;
 
 namespace SendBlobs;
 internal static class SetupCli
 {
-    public static void SetupExecute(CommandLineApplication app)
+    public static void SetupExecute(RootCommand command)
     {
-        app.HelpOption("--help");
-
-        CommandOption rpcUrlOption = app.Option("--rpcurl <rpcUrl>", "Url of the Json RPC.", CommandOptionType.SingleValue);
-        CommandOption blobTxOption = app.Option("--bloboptions <blobOptions>", "Options in format '10x1-2', '2x5-5' etc. for the blobs.", CommandOptionType.MultipleValue);
-        CommandOption privateKeyOption = app.Option("--privatekey <privateKey>", "The key to use for sending blobs.", CommandOptionType.SingleValue);
-        CommandOption privateKeyFileOption = app.Option("--keyfile <keyFile>", "File containing private keys that each blob tx will be send from.", CommandOptionType.SingleValue);
-        CommandOption receiverOption = app.Option("--receiveraddress <receiverAddress>", "Receiver address of the blobs.", CommandOptionType.SingleValue);
-        CommandOption maxFeePerDataGasOptionObsolete = app.Option("--maxfeeperdatagas <maxFeePerDataGas>", "(Optional) Set the maximum fee per blob data.", CommandOptionType.SingleValue);
-        CommandOption maxFeePerBlobGasOption = app.Option("--maxfeeperblobgas <maxFeePerBlobGas>", "(Optional) Set the maximum fee per blob data.", CommandOptionType.SingleValue);
-        CommandOption feeMultiplierOption = app.Option("--feemultiplier <feeMultiplier>", "(Optional) A multiplier to use for gas fees.", CommandOptionType.SingleValue);
-        CommandOption maxPriorityFeeGasOption = app.Option("--maxpriorityfee <maxPriorityFee>", "(Optional) The maximum priority fee for each transaction.", CommandOptionType.SingleValue);
-        CommandOption waitOption = app.Option("--wait", "(Optional) Wait for tx inclusion.", CommandOptionType.NoValue);
-
-        app.OnExecuteAsync(async cancellationToken =>
+        Option<string> rpcUrlOption = new("--rpcurl")
         {
-            string? rpcUrl = rpcUrlOption.Value();
-            (int count, int blobCount, string @break)[] blobTxCounts = ParseTxOptions(blobTxOption.Value());
+            Description = "The URL of the JSON RPC server",
+            HelpName = "URL",
+            Required = true
+        };
+        Option<string> blobTxOption = new("--bloboptions")
+        {
+            Description = "Options in format '10x1-2', '2x5-5' etc. for the blobs",
+            HelpName = "options"
+        };
+        Option<string> privateKeyOption = new("--privatekey")
+        {
+            Description = "The key to use for sending blobs",
+            HelpName = "key"
+        };
+        Option<string> privateKeyFileOption = new("--keyfile")
+        {
+            Description = "File containing private keys that each blob tx will be send from",
+            HelpName = "path"
+        };
+        Option<string> receiverOption = new("--receiveraddress")
+        {
+            Description = "Receiver address of the blobs",
+            HelpName = "address",
+            Required = true
+        };
+        Option<ulong?> maxFeePerDataGasOptionObsolete = new("--maxfeeperdatagas")
+        {
+            Description = "Set the maximum fee per blob data",
+            HelpName = "fee"
+        };
+        Option<ulong?> maxFeePerBlobGasOption = new("--maxfeeperblobgas")
+        {
+            Description = "Set the maximum fee per blob data",
+            HelpName = "fee"
+        };
+        Option<ulong> feeMultiplierOption = new("--feemultiplier")
+        {
+            DefaultValueFactory = r => 1UL,
+            Description = "A multiplier to use for gas fees",
+            HelpName = "value"
+        };
+        Option<ulong> maxPriorityFeeGasOption = new("--maxpriorityfee")
+        {
+            Description = "The maximum priority fee for each transaction",
+            HelpName = "fee"
+        };
+        Option<bool> waitOption = new("--wait") { Description = "Wait for tx inclusion" };
+        Option<string> forkOption = new("--fork") { Description = "Specify fork for MaxBlobCount, TargetBlobCount" };
 
+        command.Add(rpcUrlOption);
+        command.Add(blobTxOption);
+        command.Add(privateKeyOption);
+        command.Add(privateKeyFileOption);
+        command.Add(receiverOption);
+        command.Add(maxFeePerDataGasOptionObsolete);
+        command.Add(maxFeePerBlobGasOption);
+        command.Add(feeMultiplierOption);
+        command.Add(maxPriorityFeeGasOption);
+        command.Add(waitOption);
+        command.Add(forkOption);
+        command.SetAction((parseResult, cancellationToken) =>
+        {
             PrivateKey[] privateKeys;
 
-            if (privateKeyFileOption.HasValue())
-                privateKeys = File.ReadAllLines(privateKeyFileOption.Value()!).Select(k => new PrivateKey(k)).ToArray();
-            else if (privateKeyOption.HasValue())
-                privateKeys = [new PrivateKey(privateKeyOption.Value()!)];
+            string? privateKeyFileValue = parseResult.GetValue(privateKeyFileOption);
+            string? privateKeyValue = parseResult.GetValue(privateKeyOption);
+
+            if (privateKeyFileValue is not null)
+                privateKeys = File.ReadAllLines(privateKeyFileValue).Select(k => new PrivateKey(k)).ToArray();
+            else if (privateKeyValue is not null)
+                privateKeys = [new PrivateKey(privateKeyValue)];
             else
             {
                 Console.WriteLine("Missing private key argument.");
-                app.ShowHelp();
-                return;
+                return Task.CompletedTask;
             }
 
-            string? receiver = receiverOption.Value();
+            string? fork = parseResult.GetValue(forkOption);
+            IReleaseSpec spec = fork is null ? Prague.Instance : JsonToEthereumTest.ParseSpec(fork);
 
-            UInt256? maxFeePerBlobGas = null;
-            if (maxFeePerBlobGasOption.HasValue())
-            {
-                ulong.TryParse(maxFeePerBlobGasOption.Value(), out ulong shortMaxFeePerBlobGas);
-                maxFeePerBlobGas = shortMaxFeePerBlobGas;
-            }
-            else if (maxFeePerDataGasOptionObsolete.HasValue())
-            {
-                ulong.TryParse(maxFeePerDataGasOptionObsolete.Value(), out ulong shortMaxFeePerBlobGas);
-                maxFeePerBlobGas = shortMaxFeePerBlobGas;
-            }
-
-            ulong feeMultiplier = 1;
-            if (feeMultiplierOption.HasValue())
-                ulong.TryParse(feeMultiplierOption.Value(), out feeMultiplier);
-
-            UInt256 maxPriorityFeeGasArgs = 0;
-            if (maxPriorityFeeGasOption.HasValue()) UInt256.TryParse(maxPriorityFeeGasOption.Value(), out maxPriorityFeeGasArgs);
-
-            bool wait = waitOption.HasValue();
-
-            BlobSender sender = new(rpcUrl, SimpleConsoleLogManager.Instance);
-            await sender.SendRandomBlobs(
-                blobTxCounts,
+            BlobSender sender = new(parseResult.GetValue(rpcUrlOption)!, SimpleConsoleLogManager.Instance);
+            return sender.SendRandomBlobs(
+                ParseTxOptions(parseResult.GetValue(blobTxOption)),
                 privateKeys,
-                receiver,
-                maxFeePerBlobGas,
-                feeMultiplier,
-                maxPriorityFeeGasArgs,
-                wait);
+                parseResult.GetValue(receiverOption)!,
+                parseResult.GetValue(maxFeePerBlobGasOption) ?? parseResult.GetValue(maxFeePerDataGasOptionObsolete),
+                parseResult.GetValue(feeMultiplierOption),
+                parseResult.GetValue(maxPriorityFeeGasOption),
+                parseResult.GetValue(waitOption), spec);
         });
     }
 
-    private static (int count, int blobCount, string @break)[] ParseTxOptions(string options)
+    private static (int count, int blobCount, string @break)[] ParseTxOptions(string? options)
     {
         if (string.IsNullOrWhiteSpace(options))
             return Array.Empty<(int count, int blobCount, string @break)>();
@@ -97,7 +126,6 @@ internal static class SetupCli
             nextComma = SplitToNext(chars[offSet..], ',');
 
             ReadOnlySpan<char> @break = SplitToNext(nextComma, '-', true);
-
             ReadOnlySpan<char> rest = nextComma[..(nextComma.Length - (@break.Length == 0 ? 0 : @break.Length + 1))];
             ReadOnlySpan<char> count = SplitToNext(rest, 'x');
             ReadOnlySpan<char> txCount = SplitToNext(rest, 'x', true);
@@ -121,148 +149,216 @@ internal static class SetupCli
         return returnRemainder ? line[(i + 1)..] : line[..i];
     }
 
-    public static void SetupDistributeCommand(CommandLineApplication app)
+    public static void SetupDistributeCommand(Command root)
     {
-        app.Command("distribute", (command) =>
+        Command command = new("distribute")
         {
-            command.Description = "Distribute funds from an address to a number of new addresses.";
-            command.HelpOption("--help");
-
-            CommandOption rpcUrlOption = command.Option("--rpcurl <rpcUrl>", "Url of the Json RPC.", CommandOptionType.SingleValue);
-            CommandOption privateKeyOption = command.Option("--privatekey <privateKey>", "The private key to distribute funds from.", CommandOptionType.SingleValue);
-            CommandOption keyNumberOption = command.Option("--number <number>", "The number of new addresses/keys to make.", CommandOptionType.SingleValue);
-            CommandOption keyFileOption = command.Option("--keyfile <keyFile>", "File where the newly generated keys are written.", CommandOptionType.SingleValue);
-            CommandOption maxPriorityFeeGasOption = command.Option("--maxpriorityfee <maxPriorityFee>", "(Optional) The maximum priority fee for each transaction.", CommandOptionType.SingleValue);
-            CommandOption maxFeeOption = command.Option("--maxfee <maxFee>", "(Optional) The maxFeePerGas fee paid for each transaction.", CommandOptionType.SingleValue);
-
-            command.OnExecute(async () =>
-            {
-                uint keysToMake = uint.Parse(keyNumberOption.Value());
-                PrivateKey privateKey = new(privateKeyOption.Value());
-
-                ILogger logger = SimpleConsoleLogManager.Instance.GetClassLogger();
-                INodeManager nodeManager = InitNodeManager(rpcUrlOption.Value(), logger);
-
-                string? chainIdString = await nodeManager.Post<string>("eth_chainId") ?? "1";
-                ulong chainId = HexConvert.ToUInt64(chainIdString);
-
-                Signer signer = new Signer(chainId, privateKey, SimpleConsoleLogManager.Instance);
-                UInt256 maxFee = maxFeeOption.HasValue() ? UInt256.Parse(maxFeeOption.Value()) : 0;
-                UInt256 maxPriorityFee = maxPriorityFeeGasOption.HasValue() ? UInt256.Parse(maxPriorityFeeGasOption.Value()) : 0;
-
-                FundsDistributor distributor = new FundsDistributor(nodeManager, chainId, keyFileOption.Value(), SimpleConsoleLogManager.Instance);
-                IEnumerable<string> hashes = await distributor.DitributeFunds(signer, keysToMake, maxFee, maxPriorityFee);
-            });
-        });
-    }
-
-    public static void SetupReclaimCommand(CommandLineApplication app)
-    {
-        app.Command("reclaim", (command) =>
+            Description = "Distribute funds from an address to a number of new addresses"
+        };
+        Option<string> rpcUrlOption = new("--rpcurl")
         {
-            command.Description = "Reclaim funds distributed from the 'distribute' command.";
-            command.HelpOption("--help");
-
-            CommandOption rpcUrlOption = command.Option("--rpcurl <rpcUrl>", "Url of the Json RPC.", CommandOptionType.SingleValue);
-            CommandOption receiverOption = command.Option("--receiveraddress <receiverAddress>", "The address to send the funds to.", CommandOptionType.SingleValue);
-            CommandOption keyFileOption = command.Option("--keyfile <keyFile>", "File of the private keys to reclaim from.", CommandOptionType.SingleValue);
-            CommandOption maxPriorityFeeGasOption = command.Option("--maxpriorityfee <maxPriorityFee>", "(Optional) The maximum priority fee for each transaction.", CommandOptionType.SingleValue);
-            CommandOption maxFeeOption = command.Option("--maxfee <maxFee>", "(Optional) The maxFeePerGas paid for each transaction.", CommandOptionType.SingleValue);
-
-            command.OnExecute(async () =>
-            {
-                INodeManager nodeManager = InitNodeManager(rpcUrlOption.Value(), SimpleConsoleLogManager.Instance.GetClassLogger());
-
-                string? chainIdString = await nodeManager.Post<string>("eth_chainId") ?? "1";
-                ulong chainId = HexConvert.ToUInt64(chainIdString);
-
-                Address beneficiary = new Address(receiverOption.Value());
-
-                UInt256 maxFee = maxFeeOption.HasValue() ? UInt256.Parse(maxFeeOption.Value()) : 0;
-                UInt256 maxPriorityFee = maxPriorityFeeGasOption.HasValue() ? UInt256.Parse(maxPriorityFeeGasOption.Value()) : 0;
-
-                FundsDistributor distributor = new FundsDistributor(nodeManager, chainId, keyFileOption.Value(), SimpleConsoleLogManager.Instance);
-                IEnumerable<string> hashes = await distributor.ReclaimFunds(beneficiary, maxFee, maxPriorityFee);
-            });
-        });
-    }
-
-    public static INodeManager InitNodeManager(string rpcUrl, ILogger logger)
-    {
-        ICliConsole cliConsole = new CliConsole();
-        IJsonSerializer serializer = new EthereumJsonSerializer();
-        OneLoggerLogManager logManager = new OneLoggerLogManager(logger);
-        ICliEngine engine = new CliEngine(cliConsole);
-        INodeManager nodeManager = new NodeManager(engine, serializer, cliConsole, logManager);
-        nodeManager.SwitchUri(new Uri(rpcUrl));
-        return nodeManager;
-    }
-
-    public static void SetupSendFileCommand(CommandLineApplication app)
-    {
-        app.Command("send", (command) =>
+            Description = "The URL of the JSON RPC server",
+            HelpName = "URL",
+            Required = true
+        };
+        Option<string> privateKeyOption = new("--privatekey")
         {
-            command.Description = "Sends a file";
-            command.HelpOption("--help");
+            Description = "The private key to distribute funds from",
+            HelpName = "key",
+            Required = true,
+        };
+        Option<uint> keyNumberOption = new("--number")
+        {
+            Description = "The number of new addresses/keys to make",
+            HelpName = "value"
+        };
+        Option<string> keyFileOption = new("--keyfile")
+        {
+            Description = "File where the newly generated keys are written",
+            HelpName = "path"
+        };
+        Option<UInt256> maxPriorityFeeGasOption = new("--maxpriorityfee")
+        {
+            Description = "The maximum priority fee for each transaction",
+            HelpName = "fee"
+        };
+        Option<UInt256> maxFeeOption = new("--maxfee")
+        {
+            Description = "The maxFeePerGas fee paid for each transaction",
+            HelpName = "fee"
+        };
 
-            CommandOption fileOption = command.Option("--file <file>", "File to send as is.", CommandOptionType.SingleValue);
-            CommandOption rpcUrlOption = command.Option("--rpcurl <rpcUrl>", "Url of the Json RPC.", CommandOptionType.SingleValue);
-            CommandOption privateKeyOption = command.Option("--privatekey <privateKey>", "The key to use for sending blobs.", CommandOptionType.SingleValue);
-            CommandOption receiverOption = command.Option("--receiveraddress <receiverAddress>", "Receiver address of the blobs.", CommandOptionType.SingleValue);
-            CommandOption maxFeePerBlobGasOption = command.Option("--maxfeeperblobgas <maxFeePerBlobGas>", "(Optional) Set the maximum fee per blob data.", CommandOptionType.SingleValue);
-            CommandOption feeMultiplierOption = command.Option("--feemultiplier <feeMultiplier>", "(Optional) A multiplier to use for gas fees.", CommandOptionType.SingleValue);
-            CommandOption maxPriorityFeeGasOption = command.Option("--maxpriorityfee <maxPriorityFee>", "(Optional) The maximum priority fee for each transaction.", CommandOptionType.SingleValue);
-            CommandOption waitOption = app.Option("--wait", "(Optional) Wait for tx inclusion.", CommandOptionType.NoValue);
+        command.Add(rpcUrlOption);
+        command.Add(privateKeyOption);
+        command.Add(keyNumberOption);
+        command.Add(keyFileOption);
+        command.Add(maxPriorityFeeGasOption);
+        command.Add(maxFeeOption);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            IJsonRpcClient rpcClient = InitRpcClient(
+                parseResult.GetValue(rpcUrlOption)!,
+                SimpleConsoleLogManager.Instance.GetClassLogger());
 
-            command.OnExecuteAsync(async cancellationToken =>
-            {
-                string rpcUrl = rpcUrlOption.Value();
+            string? chainIdString = await rpcClient.Post<string>("eth_chainId") ?? "1";
+            ulong chainId = HexConvert.ToUInt64(chainIdString);
 
-                PrivateKey privateKey;
+            Signer signer = new(chainId, new PrivateKey(parseResult.GetValue(privateKeyOption)!),
+                SimpleConsoleLogManager.Instance);
 
-                if (privateKeyOption.HasValue())
-                    privateKey = new PrivateKey(privateKeyOption.Value());
-                else
-                {
-                    Console.WriteLine("Missing private key argument.");
-                    app.ShowHelp();
-                    return;
-                }
-
-                string receiver = receiverOption.Value();
-
-                UInt256 maxFeePerBlobGas = 1000;
-                if (maxFeePerBlobGasOption.HasValue())
-                {
-                    ulong.TryParse(maxFeePerBlobGasOption.Value(), out ulong shortMaxFeePerBlobGas);
-                    maxFeePerBlobGas = shortMaxFeePerBlobGas;
-                }
-
-                ulong feeMultiplier = 1;
-                if (feeMultiplierOption.HasValue())
-                    ulong.TryParse(feeMultiplierOption.Value(), out feeMultiplier);
-
-                UInt256? maxPriorityFeeGas = null;
-                if (maxPriorityFeeGasOption.HasValue() && UInt256.TryParse(maxPriorityFeeGasOption.Value(), out UInt256 maxPriorityFeeGasParsed))
-                {
-                    maxPriorityFeeGas = maxPriorityFeeGasParsed;
-                }
-
-                bool wait = waitOption.HasValue();
-
-                byte[] data = File.ReadAllBytes(fileOption.Value());
-
-                BlobSender sender = new(rpcUrl, SimpleConsoleLogManager.Instance);
-                await sender.SendData(
-                    data,
-                    privateKey,
-                    receiver,
-                    maxFeePerBlobGas,
-                    feeMultiplier,
-                    maxPriorityFeeGas,
-                    wait);
-            });
+            FundsDistributor distributor = new(
+                rpcClient, chainId, parseResult.GetValue(keyFileOption), SimpleConsoleLogManager.Instance);
+            IEnumerable<string> hashes = await distributor.DitributeFunds(
+                signer,
+                parseResult.GetValue(keyNumberOption),
+                parseResult.GetValue(maxFeeOption),
+                parseResult.GetValue(maxPriorityFeeGasOption));
         });
+
+        root.Add(command);
     }
 
+    public static void SetupReclaimCommand(Command root)
+    {
+        Command command = new("reclaim")
+        {
+            Description = "Reclaim funds distributed from the 'distribute' command"
+        };
+        Option<string> rpcUrlOption = new("--rpcurl")
+        {
+            Description = "The URL of the JSON RPC server",
+            HelpName = "URL",
+            Required = true
+        };
+        Option<string> receiverOption = new("--receiveraddress")
+        {
+            Description = "The address to send the funds to",
+            HelpName = "address",
+            Required = true,
+        };
+        Option<string> keyFileOption = new("--keyfile")
+        {
+            Description = "File of the private keys to reclaim from",
+            HelpName = "path"
+        };
+        Option<UInt256> maxPriorityFeeGasOption = new("--maxpriorityfee")
+        {
+            Description = "The maximum priority fee for each transaction",
+            HelpName = "fee"
+        };
+        Option<UInt256> maxFeeOption = new("--maxfee")
+        {
+            Description = "The maxFeePerGas fee paid for each transaction",
+            HelpName = "fee"
+        };
+
+        command.Add(rpcUrlOption);
+        command.Add(keyFileOption);
+        command.Add(maxPriorityFeeGasOption);
+        command.Add(maxFeeOption);
+        command.SetAction(async (parseResult, cancellationToken) =>
+        {
+            IJsonRpcClient rpcClient = InitRpcClient(
+                parseResult.GetValue(rpcUrlOption)!,
+                SimpleConsoleLogManager.Instance.GetClassLogger());
+
+            string? chainIdString = await rpcClient.Post<string>("eth_chainId") ?? "1";
+            ulong chainId = HexConvert.ToUInt64(chainIdString);
+
+            FundsDistributor distributor = new(rpcClient, chainId, parseResult.GetValue(keyFileOption), SimpleConsoleLogManager.Instance);
+            IEnumerable<string> hashes = await distributor.ReclaimFunds(
+                new(parseResult.GetValue(receiverOption)!),
+                parseResult.GetValue(maxFeeOption),
+                parseResult.GetValue(maxPriorityFeeGasOption));
+        });
+        root.Add(command);
+    }
+
+    public static IJsonRpcClient InitRpcClient(string rpcUrl, ILogger logger) =>
+        new BasicJsonRpcClient(
+            new Uri(rpcUrl),
+            new EthereumJsonSerializer(),
+            new OneLoggerLogManager(logger)
+        );
+
+    public static void SetupSendFileCommand(Command root)
+    {
+        Command command = new("send")
+        {
+            Description = "Sends a file"
+        };
+        Option<string> fileOption = new("--file")
+        {
+            Description = "File to send as is",
+            HelpName = "path",
+            Required = true
+        };
+        Option<string> rpcUrlOption = new("--rpcurl")
+        {
+            Description = "The URL of the JSON RPC server",
+            HelpName = "URL",
+            Required = true
+        };
+        Option<string> privateKeyOption = new("--privatekey")
+        {
+            Description = "The key to use for sending blobs",
+            HelpName = "key",
+            Required = true,
+        };
+        Option<string> receiverOption = new("--receiveraddress")
+        {
+            Description = "Receiver address of the blobs",
+            HelpName = "address",
+            Required = true,
+        };
+        Option<UInt256> maxFeePerBlobGasOption = new("--maxfeeperblobgas")
+        {
+            DefaultValueFactory = r => 1000,
+            Description = "Set the maximum fee per blob data",
+            HelpName = "fee"
+        };
+        Option<ulong> feeMultiplierOption = new("--feemultiplier")
+        {
+            DefaultValueFactory = r => 1UL,
+            Description = "A multiplier to use for gas fees",
+            HelpName = "value"
+        };
+        Option<UInt256?> maxPriorityFeeGasOption = new("--maxpriorityfee")
+        {
+            Description = "The maximum priority fee for each transaction",
+            HelpName = "fee"
+        };
+        Option<bool> waitOption = new("--wait") { Description = "Wait for tx inclusion" };
+        Option<string> forkOption = new("--fork") { Description = "Specify fork for MaxBlobCount, TargetBlobCount" };
+
+        command.Add(fileOption);
+        command.Add(rpcUrlOption);
+        command.Add(privateKeyOption);
+        command.Add(receiverOption);
+        command.Add(maxFeePerBlobGasOption);
+        command.Add(feeMultiplierOption);
+        command.Add(maxPriorityFeeGasOption);
+        command.Add(waitOption);
+        command.Add(forkOption);
+        command.SetAction((parseResult, cancellationToken) =>
+        {
+            PrivateKey privateKey = new(parseResult.GetValue(privateKeyOption)!);
+            byte[] data = File.ReadAllBytes(parseResult.GetValue(fileOption)!);
+            BlobSender sender = new(parseResult.GetValue(rpcUrlOption)!, SimpleConsoleLogManager.Instance);
+
+            string? fork = parseResult.GetValue(forkOption);
+            IReleaseSpec spec = fork is null ? Prague.Instance : JsonToEthereumTest.ParseSpec(fork);
+
+            return sender.SendData(
+                data,
+                privateKey,
+                parseResult.GetValue(receiverOption)!,
+                parseResult.GetValue(maxFeePerBlobGasOption),
+                parseResult.GetValue(feeMultiplierOption),
+                parseResult.GetValue(maxPriorityFeeGasOption),
+                parseResult.GetValue(waitOption), spec);
+        });
+
+        root.Add(command);
+    }
 }

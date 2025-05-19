@@ -4,12 +4,13 @@
 using System.Threading;
 using System.Threading.Tasks;
 using Nethermind.Api;
+using Nethermind.Api.Steps;
 using Nethermind.Core.Attributes;
 using Nethermind.Crypto;
 
 namespace Nethermind.Init.Steps
 {
-    [RunnerStepDependencies(typeof(InitRlp))]
+    [RunnerStepDependencies(typeof(InitTxTypesAndRlp))]
     public class InitCrypto : IStep
     {
         private readonly IBasicApi _api;

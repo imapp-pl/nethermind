@@ -37,8 +37,12 @@ using Nethermind.Wallet;
 using BlockTree = Nethermind.Blockchain.BlockTree;
 using Nethermind.Blockchain.Synchronization;
 using Nethermind.Config;
+using Nethermind.Core.Test;
+using Nethermind.Facade.Find;
 using Nethermind.Facade.Simulate;
+using Nethermind.Synchronization;
 using Nethermind.Synchronization.ParallelSync;
+using NSubstitute;
 
 namespace Nethermind.JsonRpc.Benchmark
 {
@@ -58,14 +62,15 @@ namespace Nethermind.JsonRpc.Benchmark
 
             ISpecProvider specProvider = MainnetSpecProvider.Instance;
             IReleaseSpec spec = MainnetSpecProvider.Instance.GenesisSpec;
-            var trieStore = new TrieStore(stateDb, LimboLogs.Instance);
+            var trieStore = TestTrieStoreFactory.Build(stateDb, LimboLogs.Instance);
 
             WorldState stateProvider = new(trieStore, codeDb, LimboLogs.Instance);
             stateProvider.CreateAccount(Address.Zero, 1000.Ether());
             stateProvider.Commit(spec);
             stateProvider.CommitTree(0);
 
-            WorldStateManager stateManager = new WorldStateManager(stateProvider, trieStore, dbProvider, LimboLogs.Instance);
+            WorldStateManager stateManager = new(stateProvider, trieStore, dbProvider, LimboLogs.Instance);
+            OverridableWorldStateManager overridableScope = new(dbProvider, trieStore.AsReadOnly(), LimboLogs.Instance);
 
             StateReader stateReader = new(trieStore, codeDb, LimboLogs.Instance);
 
@@ -75,7 +80,7 @@ namespace Nethermind.JsonRpc.Benchmark
                 new HeaderStore(dbProvider.HeadersDb, dbProvider.BlockNumbersDb),
                 dbProvider.BlockInfosDb,
                 dbProvider.MetadataDb,
-                new BlockStore(dbProvider.BadBlocksDb),
+                new BadBlockStore(dbProvider.BadBlocksDb, 100),
                 chainLevelInfoRepository,
                 specProvider,
                 NullBloomStorage.Instance,
@@ -83,7 +88,7 @@ namespace Nethermind.JsonRpc.Benchmark
                 LimboLogs.Instance);
             _blockhashProvider = new BlockhashProvider(blockTree, specProvider, stateProvider, LimboLogs.Instance);
             CodeInfoRepository codeInfoRepository = new();
-            _virtualMachine = new VirtualMachine(_blockhashProvider, specProvider, codeInfoRepository, LimboLogs.Instance);
+            _virtualMachine = new VirtualMachine(_blockhashProvider, specProvider, LimboLogs.Instance);
 
             Block genesisBlock = Build.A.Block.Genesis.TestObject;
             blockTree.SuggestBlock(genesisBlock);
@@ -102,8 +107,9 @@ namespace Nethermind.JsonRpc.Benchmark
                 transactionsExecutor,
                 stateProvider,
                 NullReceiptStorage.Instance,
+                transactionProcessor,
+                new BeaconBlockRootHandler(transactionProcessor, stateProvider),
                 new BlockhashStore(specProvider, stateProvider),
-                new BeaconBlockRootHandler(transactionProcessor),
                 LimboLogs.Instance);
 
             EthereumEcdsa ecdsa = new(specProvider.ChainId);
@@ -133,8 +139,8 @@ namespace Nethermind.JsonRpc.Benchmark
                 new ReceiptsRecovery(ecdsa, specProvider));
 
             BlockchainBridge bridge = new(
-                new ReadOnlyTxProcessingEnv(
-                    stateManager,
+                new OverridableTxProcessingEnv(
+                    overridableScope,
                     new ReadOnlyBlockTree(blockTree),
                     specProvider,
                     LimboLogs.Instance),
@@ -143,6 +149,7 @@ namespace Nethermind.JsonRpc.Benchmark
                     new ReadOnlyBlockTree(blockTree),
                     new ReadOnlyDbProvider(dbProvider, true),
                     specProvider,
+                    SimulateTransactionProcessorFactory.Instance,
                     LimboLogs.Instance),
                 NullTxPool.Instance,
                 NullReceiptStorage.Instance,
@@ -160,7 +167,7 @@ namespace Nethermind.JsonRpc.Benchmark
 
             IReceiptStorage receiptStorage = new InMemoryReceiptStorage();
             ISyncConfig syncConfig = new SyncConfig();
-            EthSyncingInfo ethSyncingInfo = new(blockTree, receiptStorage, syncConfig, new StaticSelector(SyncMode.All), null, LimboLogs.Instance);
+            EthSyncingInfo ethSyncingInfo = new(blockTree, Substitute.For<ISyncPointers>(), syncConfig, new StaticSelector(SyncMode.All), null, LimboLogs.Instance);
 
             _ethModule = new EthRpcModule(
                 new JsonRpcConfig(),

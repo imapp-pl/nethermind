@@ -16,7 +16,7 @@ namespace Nethermind.Core.Test.Builders
 
         public TrieBuilder(INodeStorage db)
         {
-            TestObjectInternal = new PatriciaTree(new TrieStore(db, LimboLogs.Instance).GetTrieStore(null), Keccak.EmptyTreeHash, false, true, LimboLogs.Instance);
+            TestObjectInternal = new PatriciaTree(new RawScopedTrieStore(db), Keccak.EmptyTreeHash, false, true, LimboLogs.Instance);
         }
 
         public TrieBuilder WithAccountsByIndex(int start, int count)
@@ -36,7 +36,7 @@ namespace Nethermind.Core.Test.Builders
                 TestObjectInternal.Set(key.Bytes, value);
             }
 
-            TestObjectInternal.Commit(0);
+            TestObjectInternal.Commit();
             TestObjectInternal.UpdateRootHash();
 
             return this;

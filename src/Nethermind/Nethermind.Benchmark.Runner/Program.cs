@@ -16,6 +16,8 @@ using Nethermind.Core.Extensions;
 using BenchmarkDotNet.Loggers;
 using System;
 using BenchmarkDotNet.Filters;
+using BenchmarkDotNet.Columns;
+using Nethermind.Precompiles.Benchmark;
 
 namespace Nethermind.Benchmark.Runner
 {
@@ -28,6 +30,7 @@ namespace Nethermind.Benchmark.Runner
         public string ByteCode { get; set; }
 
     }
+
 
     public static class Program
     {
@@ -73,14 +76,13 @@ namespace Nethermind.Benchmark.Runner
 
         static void RunFullBenchmark(string[] args)
         {
-            List<Assembly> additionalJobAssemblies = new()
-            {
+            List<Assembly> additionalJobAssemblies = [
                 typeof(JsonRpc.Benchmark.EthModuleBenchmarks).Assembly,
                 typeof(Benchmarks.Core.Keccak256Benchmarks).Assembly,
                 typeof(Evm.Benchmark.EvmStackBenchmarks).Assembly,
                 typeof(Network.Benchmarks.DiscoveryBenchmarks).Assembly,
                 typeof(Precompiles.Benchmark.KeccakBenchmark).Assembly
-            };
+            ];
 
             List<Assembly> simpleJobAssemblies = new()
             {
@@ -95,13 +97,15 @@ namespace Nethermind.Benchmark.Runner
             {
                 foreach (Assembly assembly in additionalJobAssemblies)
                 {
-                    BenchmarkRunner.Run(assembly, new DashboardConfig(Job.MediumRun.WithRuntime(CoreRuntime.Core80)), args);
+                    BenchmarkRunner.Run(assembly, new DashboardConfig(Job.MediumRun.WithRuntime(CoreRuntime.Core90)), args);
                 }
 
                 foreach (Assembly assembly in simpleJobAssemblies)
                 {
                     BenchmarkRunner.Run(assembly, new DashboardConfig(), args);
                 }
+
+                BenchmarkRunner.Run(typeof(KeccakBenchmark).Assembly, new PrecompileBenchmarkConfig(), args);
             }
         }
         public class DashboardConfig : ManualConfig
@@ -113,9 +117,10 @@ namespace Nethermind.Benchmark.Runner
                     AddJob(job.WithToolchain(InProcessNoEmitToolchain.Instance));
                 }
 
-                AddColumnProvider(BenchmarkDotNet.Columns.DefaultColumnProviders.Descriptor);
-                AddColumnProvider(BenchmarkDotNet.Columns.DefaultColumnProviders.Statistics);
-                AddColumnProvider(BenchmarkDotNet.Columns.DefaultColumnProviders.Params);
+                AddColumnProvider(DefaultColumnProviders.Descriptor);
+                AddColumnProvider(DefaultColumnProviders.Statistics);
+                AddColumnProvider(DefaultColumnProviders.Params);
+                AddColumnProvider(DefaultColumnProviders.Metrics);
                 AddLogger(BenchmarkDotNet.Loggers.ConsoleLogger.Default);
                 AddExporter(BenchmarkDotNet.Exporters.Json.JsonExporter.FullCompressed);
                 AddDiagnoser(BenchmarkDotNet.Diagnosers.MemoryDiagnoser.Default);
@@ -132,6 +137,7 @@ namespace Nethermind.Benchmark.Runner
                     AddJob(job);
                 }
 
+                AddColumnProvider(DefaultColumnProviders.Descriptor);
                 AddColumnProvider(BenchmarkDotNet.Columns.DefaultColumnProviders.Statistics);
                 AddColumnProvider(BenchmarkDotNet.Columns.DefaultColumnProviders.Params);
                 AddColumnProvider(BenchmarkDotNet.Columns.DefaultColumnProviders.Metrics);
@@ -140,11 +146,20 @@ namespace Nethermind.Benchmark.Runner
                 AddDiagnoser(BenchmarkDotNet.Diagnosers.MemoryDiagnoser.Default);
                 WithOptions(ConfigOptions.DisableLogFile);
 
+
                 if (filters.Any())
                 {
                     IFilter[] nameFilters = filters.Select(a => new SimpleFilter(c => c.Parameters.Items.Any(p => p.Value.ToString().Contains(a)))).OfType<IFilter>().ToArray();
                     AddFilter(new DisjunctionFilter(nameFilters));
                 }
+            }
+        }
+
+        public class PrecompileBenchmarkConfig : DashboardConfig
+        {
+            public PrecompileBenchmarkConfig() : base(Job.MediumRun.WithRuntime(CoreRuntime.Core90))
+            {
+                AddColumnProvider(new GasColumnProvider());
             }
         }
 
