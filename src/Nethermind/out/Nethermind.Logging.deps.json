@@ -1,0 +1,23 @@
+{
+  "runtimeTarget": {
+    "name": ".NETCoreApp,Version=v8.0",
+    "signature": ""
+  },
+  "compilationOptions": {},
+  "targets": {
+    ".NETCoreApp,Version=v8.0": {
+      "Nethermind.Logging/1.29.0-unstable": {
+        "runtime": {
+          "Nethermind.Logging.dll": {}
+        }
+      }
+    }
+  },
+  "libraries": {
+    "Nethermind.Logging/1.29.0-unstable": {
+      "type": "project",
+      "serviceable": false,
+      "sha512": ""
+    }
+  }
+}
