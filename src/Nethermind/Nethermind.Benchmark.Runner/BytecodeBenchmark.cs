@@ -40,39 +40,29 @@ public class BytecodeBenchmark
 {
     public static byte[] ByteCode { get; set; }
 
-    private IReleaseSpec _spec = MainnetSpecProvider.Instance.GetSpec(MainnetSpecProvider.CancunActivation);
+    private IReleaseSpec _spec = MainnetSpecProvider.Instance.GetSpec(MainnetSpecProvider.OsakaActivation);
     private ITxTracer _txTracer = NullTxTracer.Instance;
     private ExecutionEnvironment _environment;
     private IVirtualMachine _virtualMachine;
-    private BlockHeader _header = new BlockHeader(Keccak.Zero, Keccak.Zero, Address.Zero, UInt256.One, MainnetSpecProvider.IstanbulBlockNumber, Int64.MaxValue, 1UL, Bytes.Empty);
-    private IBlockhashProvider _blockhashProvider = new TestBlockhashProvider();
+    private BlockHeader _header = new BlockHeader(Keccak.Zero, Keccak.Zero, Address.Zero, UInt256.One, Int64.MaxValue, Int64.MaxValue, 1UL, Bytes.Empty);
+    private IBlockhashProvider _blockhashProvider = new Nethermind.Evm.Benchmark.TestBlockhashProvider(MainnetSpecProvider.Instance);
     private EvmState _evmState;
     private WorldState _stateProvider;
+    CodeInfoRepository codeInfoRepository = new();
 
     [GlobalSetup]
     public void GlobalSetup()
     {
-        TrieStore trieStore = TestTrieStoreFactory.Build(new MemDb(),
-                Prune.WhenCacheReaches(1.MiB()),
-                Persist.EveryNBlock(2), NullLogManager.Instance);
-        var codeDb = new MemDb();
+        ByteCode = Bytes.FromHexString(Environment.GetEnvironmentVariable("NETH.BENCHMARK.BYTECODE") ?? string.Empty);
 
+        TrieStore trieStore = TestTrieStoreFactory.Build(new MemDb(), new OneLoggerLogManager(NullLogger.Instance));
+        var codeDb = new MemDb();
         _stateProvider = new WorldState(trieStore, codeDb, new OneLoggerLogManager(NullLogger.Instance));
         _stateProvider.CreateAccount(Address.Zero, 1000.Ether());
         _stateProvider.Commit(_spec);
-
         _virtualMachine = new VirtualMachine(_blockhashProvider, MainnetSpecProvider.Instance, LimboLogs.Instance);
 
-        
-    }
-
-    [IterationSetup]
-    public void Setup()
-    {
-        ByteCode = Bytes.FromHexString(Environment.GetEnvironmentVariable("NETH.BENCHMARK.BYTECODE") ?? string.Empty);
-        CodeInfoRepository codeInfoRepository = new();
         KzgPolynomialCommitments.InitializeAsync().Wait();
-        
         _environment = new ExecutionEnvironment
         (
             executingAccount: Address.Zero,
@@ -88,6 +78,13 @@ public class BytecodeBenchmark
         _evmState = EvmState.RentTopLevel(long.MaxValue, ExecutionType.TRANSACTION, _stateProvider.TakeSnapshot(), _environment, new StackAccessTracker());
     }
 
+    // [IterationSetup]
+    // public void Setup()
+    // {
+
+
+    // }
+
     [Benchmark]
     public void ExecuteCode()
     {
@@ -97,6 +94,7 @@ public class BytecodeBenchmark
             throw new Exception("Execution failed: " + ts.Error);
         }
     }
+
 
     [IterationCleanup]
     public void Cleanup()
