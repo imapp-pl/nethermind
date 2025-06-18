@@ -2,37 +2,35 @@
 // SPDX-License-Identifier: LGPL-3.0-only
 
 using System;
+using System.Collections.Generic;
+using System.Diagnostics;
 using BenchmarkDotNet.Attributes;
+using Ethereum.Test.Base;
+using Nethermind.Config;
+using Nethermind.Consensus.Validators;
 using Nethermind.Core;
 using Nethermind.Core.Crypto;
 using Nethermind.Core.Extensions;
 using Nethermind.Core.Specs;
 using Nethermind.Core.Test;
 using Nethermind.Core.Test.Builders;
+using Nethermind.Core.Test.Modules;
+using Nethermind.Crypto;
 using Nethermind.Db;
+using Nethermind.Evm;
 using Nethermind.Evm.CodeAnalysis;
-using Nethermind.Specs;
 using Nethermind.Evm.Tracing;
+using Nethermind.Evm.TransactionProcessing;
 using Nethermind.Int256;
 using Nethermind.Logging;
+using Nethermind.Specs;
+using Nethermind.Specs.Forks;
+using Nethermind.Specs.Test;
 using Nethermind.State;
 using Nethermind.Trie;
 using Nethermind.Trie.Pruning;
-using Nethermind.Evm;
-using Ethereum.Test.Base;
-using static Nethermind.Evm.VirtualMachine;
 using NSubstitute.Routing.AutoValues;
-
-
-using System.Collections.Generic;
-using System.Diagnostics;
-using Nethermind.Config;
-using Nethermind.Consensus.Validators;
-using Nethermind.Core.Test.Modules;
-using Nethermind.Crypto;
-using Nethermind.Evm.TransactionProcessing;
-using Nethermind.Specs.Forks;
-using Nethermind.Specs.Test;
+using static Nethermind.Evm.VirtualMachine;
 
 namespace Nethermind.Benchmark.Runner;
 
@@ -40,50 +38,73 @@ public class BytecodeBenchmark
 {
     public static byte[] ByteCode { get; set; }
 
-    private IReleaseSpec _spec = MainnetSpecProvider.Instance.GetSpec(MainnetSpecProvider.OsakaActivation);
+    private IReleaseSpec _spec = MainnetSpecProvider.Instance.GetSpec(
+        MainnetSpecProvider.OsakaActivation
+    );
     private ITxTracer _txTracer = NullTxTracer.Instance;
     private ExecutionEnvironment _environment;
     private IVirtualMachine _virtualMachine;
-    private BlockHeader _header = new BlockHeader(Keccak.Zero, Keccak.Zero, Address.Zero, UInt256.One, Int64.MaxValue, Int64.MaxValue, 1UL, Bytes.Empty);
-    private IBlockhashProvider _blockhashProvider = new Nethermind.Evm.Benchmark.TestBlockhashProvider(MainnetSpecProvider.Instance);
+    private BlockHeader _header = new BlockHeader(
+        Keccak.Zero,
+        Keccak.Zero,
+        Address.Zero,
+        UInt256.One,
+        MainnetSpecProvider.ParisBlockNumber + 4,
+        Int64.MaxValue,
+        MainnetSpecProvider.OsakaBlockTimestamp,
+        Bytes.Empty
+    );
+    private IBlockhashProvider _blockhashProvider =
+        new Nethermind.Evm.Benchmark.TestBlockhashProvider(MainnetSpecProvider.Instance);
     private EvmState _evmState;
-    private WorldState _stateProvider;
-    CodeInfoRepository codeInfoRepository = new();
+    private IWorldState _stateProvider;
 
     [GlobalSetup]
     public void GlobalSetup()
     {
-        ByteCode = Bytes.FromHexString(Environment.GetEnvironmentVariable("NETH.BENCHMARK.BYTECODE") ?? string.Empty);
+        ByteCode = Bytes.FromHexString(
+            Environment.GetEnvironmentVariable("NETH.BENCHMARK.BYTECODE") ?? string.Empty
+        );
 
-        TrieStore trieStore = TestTrieStoreFactory.Build(new MemDb(), new OneLoggerLogManager(NullLogger.Instance));
-        var codeDb = new MemDb();
-        _stateProvider = new WorldState(trieStore, codeDb, new OneLoggerLogManager(NullLogger.Instance));
+        IWorldStateManager worldStateManager = TestWorldStateFactory.CreateForTest();
+        _stateProvider = worldStateManager.GlobalWorldState;
         _stateProvider.CreateAccount(Address.Zero, 1000.Ether());
         _stateProvider.Commit(_spec);
-        _virtualMachine = new VirtualMachine(_blockhashProvider, MainnetSpecProvider.Instance, LimboLogs.Instance);
+        CodeInfoRepository codeInfoRepository = new();
+        _virtualMachine = new VirtualMachine(
+            _blockhashProvider,
+            MainnetSpecProvider.Instance,
+            LimboLogs.Instance
+        );
+        _virtualMachine.SetBlockExecutionContext(new BlockExecutionContext(_header, _spec));
+        _virtualMachine.SetTxExecutionContext(
+            new TxExecutionContext(Address.Zero, codeInfoRepository, null, 0)
+        );
 
         KzgPolynomialCommitments.InitializeAsync().Wait();
-        _environment = new ExecutionEnvironment
-        (
+        _environment = new ExecutionEnvironment(
             executingAccount: Address.Zero,
             codeSource: Address.Zero,
             caller: Address.Zero,
             codeInfo: new CodeInfo(ByteCode),
+            callDepth: 0,
             value: 0,
             transferValue: 0,
-            txExecutionContext: new TxExecutionContext(new BlockExecutionContext(_header, _spec), Address.Zero, 0, null, codeInfoRepository),
             inputData: default
         );
-
-        _evmState = EvmState.RentTopLevel(long.MaxValue, ExecutionType.TRANSACTION, _stateProvider.TakeSnapshot(), _environment, new StackAccessTracker());
     }
 
-    // [IterationSetup]
-    // public void Setup()
-    // {
-
-
-    // }
+    [IterationSetup]
+    public void Setup()
+    {
+        _evmState = EvmState.RentTopLevel(
+            long.MaxValue,
+            ExecutionType.TRANSACTION,
+            _environment,
+            new StackAccessTracker(),
+            _stateProvider.TakeSnapshot()
+        );
+    }
 
     [Benchmark]
     public void ExecuteCode()
@@ -94,7 +115,6 @@ public class BytecodeBenchmark
             throw new Exception("Execution failed: " + ts.Error);
         }
     }
-
 
     [IterationCleanup]
     public void Cleanup()
