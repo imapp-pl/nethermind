@@ -43,7 +43,7 @@ namespace Nethermind.Merge.AuRa.InitializationSteps
                 _api.SpecProvider!,
                 _api.BlockValidator!,
                 _api.RewardCalculatorSource!.Get(transactionProcessor),
-                new BlockProcessor.BlockValidationTransactionsExecutor(transactionProcessor, worldState),
+                new BlockProcessor.BlockValidationTransactionsExecutor(new ExecuteTransactionProcessorAdapter(transactionProcessor), worldState),
                 worldState,
                 _api.ReceiptStorage!,
                 new BeaconBlockRootHandler(transactionProcessor, worldState),
@@ -56,15 +56,6 @@ namespace Nethermind.Merge.AuRa.InitializationSteps
                 GetGasLimitCalculator(),
                 contractRewriter,
                 preWarmer: preWarmer);
-        }
-
-        protected override void InitSealEngine()
-        {
-            base.InitSealEngine();
-
-            if (_api.SealValidator is null) throw new StepDependencyException(nameof(_api.SealValidator));
-
-            _api.SealValidator = new Plugin.MergeSealValidator(_poSSwitcher!, _api.SealValidator!);
         }
     }
 }

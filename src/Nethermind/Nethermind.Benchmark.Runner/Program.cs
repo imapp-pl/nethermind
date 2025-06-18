@@ -17,6 +17,7 @@ using BenchmarkDotNet.Loggers;
 using System;
 using BenchmarkDotNet.Filters;
 using BenchmarkDotNet.Columns;
+using Nethermind.Benchmarks.State;
 using Nethermind.Precompiles.Benchmark;
 
 namespace Nethermind.Benchmark.Runner
